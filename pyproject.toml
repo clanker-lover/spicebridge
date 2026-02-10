@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "spicelib>=1.4.0",
     "numpy",
+    "mcp[cli]>=1.25,<2",
 ]
 
 [project.optional-dependencies]
