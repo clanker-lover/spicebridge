@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 
 from spicebridge.circuit_manager import CircuitManager
 from spicebridge.parser import parse_results
+from spicebridge.schematic import draw_schematic as _draw_schematic
 from spicebridge.simulator import run_simulation
 
 mcp = FastMCP("SPICEBridge")
@@ -139,6 +140,22 @@ def get_results(circuit_id: str) -> dict:
         "status": "ok",
         "results": circuit.last_results,
     }
+
+
+@mcp.tool()
+def draw_schematic(circuit_id: str, fmt: str = "png") -> dict:
+    """Generate a schematic diagram from a stored circuit's netlist."""
+    try:
+        circuit = _manager.get(circuit_id)
+    except KeyError as e:
+        return {"status": "error", "error": str(e)}
+
+    try:
+        output_file = circuit.output_dir / f"schematic.{fmt}"
+        _draw_schematic(circuit.netlist, output_file, fmt=fmt)
+        return {"status": "ok", "filepath": str(output_file), "format": fmt}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 if __name__ == "__main__":

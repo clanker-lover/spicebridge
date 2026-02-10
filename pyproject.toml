@@ -12,6 +12,8 @@ dependencies = [
     "spicelib>=1.4.0",
     "numpy",
     "mcp[cli]>=1.25,<2",
+    "schemdraw",
+    "matplotlib",
 ]
 
 [project.optional-dependencies]
