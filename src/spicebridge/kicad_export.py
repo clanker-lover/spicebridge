@@ -7,6 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from spicebridge.sanitize import validate_filename
 from spicebridge.schematic import ParsedComponent, _is_ground, parse_netlist
 
 # ---------------------------------------------------------------------------
@@ -739,6 +740,8 @@ def export_kicad_schematic(
     Raises:
         ValueError: If the netlist contains no components.
     """
+    validate_filename(filename)
+
     components = parse_netlist(netlist)
     if not components:
         raise ValueError("Netlist contains no components to export")

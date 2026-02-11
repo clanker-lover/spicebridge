@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from mcp.server.fastmcp import FastMCP
@@ -28,6 +29,12 @@ from spicebridge.parser import (
     read_ac_at_frequency,
     read_ac_bandwidth,
 )
+from spicebridge.sanitize import (
+    sanitize_netlist,
+    validate_component_value,
+    validate_filename,
+    validate_format,
+)
 from spicebridge.schematic import draw_schematic as _draw_schematic
 from spicebridge.schematic import parse_netlist
 from spicebridge.simulator import run_simulation, validate_netlist_syntax
@@ -43,6 +50,8 @@ from spicebridge.template_manager import (
     substitute_params,
 )
 from spicebridge.web_viewer import get_viewer_server, start_viewer
+
+logger = logging.getLogger(__name__)
 
 mcp = FastMCP("SPICEBridge")
 _manager = CircuitManager()
@@ -85,19 +94,28 @@ def _resolve_model_includes(model_names: list[str]) -> str:
 @mcp.tool()
 def create_circuit(netlist: str, models: list[str] | None = None) -> dict:
     """Store a SPICE netlist and return a circuit ID for subsequent analyses."""
+    try:
+        sanitize_netlist(netlist)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
     if models:
         try:
             includes = _resolve_model_includes(models)
         except ValueError as e:
             return {"status": "error", "error": str(e)}
-        netlist = includes + "\n" + netlist
+        # Insert .include lines after the title (first line) per SPICE convention
+        lines = netlist.split("\n", 1)
+        if len(lines) == 2:
+            netlist = lines[0] + "\n" + includes + "\n" + lines[1]
+        else:
+            netlist = netlist + "\n" + includes
     circuit_id = _manager.create(netlist)
     try:
         detected = auto_detect_ports(netlist)
         if detected:
             _manager.set_ports(circuit_id, detected)
     except Exception:
-        pass  # non-fatal
+        logger.debug("Port auto-detection failed", exc_info=True)
     viewer = get_viewer_server()
     if viewer is not None:
         viewer.notify_change({"type": "circuit_created", "circuit_id": circuit_id})
@@ -219,6 +237,10 @@ def get_results(circuit_id: str) -> dict:
 def draw_schematic(circuit_id: str, fmt: str = "png") -> dict:
     """Generate a schematic diagram from a stored circuit's netlist."""
     try:
+        validate_format(fmt)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+    try:
         circuit = _manager.get(circuit_id)
     except KeyError as e:
         return {"status": "error", "error": str(e)}
@@ -240,6 +262,7 @@ def export_kicad(circuit_id: str, filename: str | None = None) -> dict:
         return {"status": "error", "error": str(e)}
     try:
         fname = filename or f"{circuit_id}.kicad_sch"
+        validate_filename(fname)
         output_path, warnings = _export_kicad(
             circuit.netlist,
             output_dir=circuit.output_dir,
@@ -398,35 +421,18 @@ def load_template(
 
     if specs is not None:
         try:
-            solver_result = _solve_components(template_id, specs)
+            netlist, calculated_values, solver_notes, params = _solve_and_snap(
+                template_id, specs, params, netlist
+            )
         except ValueError as exc:
-            if "Unknown topology" in str(exc):
-                # Template exists but has no solver — fall back to defaults
-                solver_notes = [
-                    f"No solver for '{template_id}'; using template defaults."
-                ]
-            else:
-                return {"status": "error", "error": str(exc)}
-        else:
-            solver_params: dict[str, str] = {}
-            for name, raw_val in solver_result["components"].items():
-                if raw_val in ("open", "0"):
-                    solver_params[name] = raw_val
-                else:
-                    numeric = parse_spice_value(str(raw_val))
-                    snapped = snap_to_standard(numeric, "E24")
-                    solver_params[name] = format_engineering(snapped)
-            calculated_values = dict(solver_params)
-            solver_notes = solver_result.get("notes", [])
-
-            # Explicit params override solver values
-            if params:
-                solver_params.update(params)
-
-            netlist = substitute_params(netlist, solver_params)
-            params = None  # already applied
+            return {"status": "error", "error": str(exc)}
 
     if params:
+        try:
+            for v in params.values():
+                validate_component_value(str(v))
+        except ValueError as e:
+            return {"status": "error", "error": str(e)}
         netlist = substitute_params(netlist, params)
 
     if models:
@@ -434,7 +440,12 @@ def load_template(
             includes = _resolve_model_includes(models)
         except ValueError as e:
             return {"status": "error", "error": str(e)}
-        netlist = includes + "\n" + netlist
+        # Insert .include lines after the title (first line) per SPICE convention
+        lines = netlist.split("\n", 1)
+        if len(lines) == 2:
+            netlist = lines[0] + "\n" + includes + "\n" + lines[1]
+        else:
+            netlist = netlist + "\n" + includes
 
     circuit_id = _manager.create(netlist)
     # Store ports from template or auto-detect
@@ -446,7 +457,7 @@ def load_template(
             if detected:
                 _manager.set_ports(circuit_id, detected)
         except Exception:
-            pass  # non-fatal
+            logger.debug("Port auto-detection failed", exc_info=True)
     preview_lines = netlist.strip().splitlines()[:5]
     result = {
         "status": "ok",
@@ -466,6 +477,10 @@ def load_template(
 @mcp.tool()
 def modify_component(circuit_id: str, component: str, value: str) -> dict:
     """Modify a component value in a stored circuit's netlist."""
+    try:
+        validate_component_value(value)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
     try:
         circuit = _manager.get(circuit_id)
     except KeyError as e:
@@ -1010,6 +1025,150 @@ def list_models() -> dict:
     }
 
 
+def _build_analysis_params(
+    start_freq: float | None,
+    stop_freq: float | None,
+    points_per_decade: int | None,
+    stop_time: float | None,
+    step_time: float | None,
+) -> dict:
+    """Collect non-None analysis parameters into a dict."""
+    params: dict = {}
+    if start_freq is not None:
+        params["start_freq"] = start_freq
+    if stop_freq is not None:
+        params["stop_freq"] = stop_freq
+    if points_per_decade is not None:
+        params["points_per_decade"] = points_per_decade
+    if stop_time is not None:
+        params["stop_time"] = stop_time
+    if step_time is not None:
+        params["step_time"] = step_time
+    return params
+
+
+def _run_sensitivity_sweep(
+    netlist: str,
+    components: list,
+    tolerances: dict | None,
+    default_tol: float,
+    analysis_cmd: str,
+) -> tuple[list[tuple[str, int, dict]], int]:
+    """Run +tol/-tol sweep for each component. Returns (sensitivity_runs, num_runs)."""
+    n = len(components)
+    sensitivity_runs: list[tuple[str, int, dict]] = []
+    num_runs = 0
+    for idx, comp in enumerate(components):
+        for direction in (-1, 1):
+            corner = tuple(0 if j != idx else direction for j in range(n))
+            values = apply_corner(components, tolerances, default_tol, corner)
+            modified = substitute_values(netlist, components, values)
+            result = run_single_sim(modified, analysis_cmd)
+            num_runs += 1
+            if result is not None:
+                sensitivity_runs.append((comp.ref, direction, result))
+    return sensitivity_runs, num_runs
+
+
+def _run_corner_analysis(
+    netlist: str,
+    components: list,
+    tolerances: dict | None,
+    default_tol: float,
+    analysis_cmd: str,
+    sensitivity: dict,
+) -> tuple[list[tuple[tuple[int, ...], dict]], int, str]:
+    """Run exhaustive or sensitivity-guided corners.
+
+    Returns (corner_results, num_runs, strategy).
+    """
+    n = len(components)
+    corner_results: list[tuple[tuple[int, ...], dict]] = []
+    num_runs = 0
+
+    if n <= 8:
+        strategy = "exhaustive"
+        corners = generate_corners(n)
+        for corner in corners:
+            values = apply_corner(components, tolerances, default_tol, corner)
+            modified = substitute_values(netlist, components, values)
+            result = run_single_sim(modified, analysis_cmd)
+            num_runs += 1
+            if result is not None:
+                corner_results.append((corner, result))
+    else:
+        strategy = "sensitivity"
+        predicted_corners: set[tuple[int, ...]] = set()
+        for _metric_key, entries in sensitivity.items():
+            max_corner = tuple(
+                1
+                if next(
+                    (e["pct_per_pct"] for e in entries if e["component"] == c.ref), 0
+                )
+                >= 0
+                else -1
+                for c in components
+            )
+            min_corner = tuple(-d for d in max_corner)
+            predicted_corners.add(max_corner)
+            predicted_corners.add(min_corner)
+
+        predicted_corners.add(tuple(1 for _ in range(n)))
+        predicted_corners.add(tuple(-1 for _ in range(n)))
+
+        max_predicted = 100
+        if len(predicted_corners) > max_predicted:
+            predicted_corners = set(list(predicted_corners)[:max_predicted])
+
+        for corner in predicted_corners:
+            values = apply_corner(components, tolerances, default_tol, corner)
+            modified = substitute_values(netlist, components, values)
+            result = run_single_sim(modified, analysis_cmd)
+            num_runs += 1
+            if result is not None:
+                corner_results.append((corner, result))
+
+    return corner_results, num_runs, strategy
+
+
+def _solve_and_snap(
+    template_id: str, specs: dict, params: dict | None, netlist: str
+) -> tuple[str, dict[str, str] | None, list[str] | None, dict | None]:
+    """Run solver, snap to E24, merge explicit params.
+
+    Returns (netlist, calculated_values, solver_notes, remaining_params).
+    remaining_params is None if params were already applied.
+    Returns an error dict instead of the tuple if solver fails.
+    """
+    calculated_values: dict[str, str] | None = None
+    solver_notes: list[str] | None = None
+
+    try:
+        solver_result = _solve_components(template_id, specs)
+    except ValueError as exc:
+        if "Unknown topology" in str(exc):
+            solver_notes = [f"No solver for '{template_id}'; using template defaults."]
+            return netlist, calculated_values, solver_notes, params
+        raise
+
+    solver_params: dict[str, str] = {}
+    for name, raw_val in solver_result["components"].items():
+        if raw_val in ("open", "0"):
+            solver_params[name] = raw_val
+        else:
+            numeric = parse_spice_value(str(raw_val))
+            snapped = snap_to_standard(numeric, "E24")
+            solver_params[name] = format_engineering(snapped)
+    calculated_values = dict(solver_params)
+    solver_notes = solver_result.get("notes", [])
+
+    if params:
+        solver_params.update(params)
+
+    netlist = substitute_params(netlist, solver_params)
+    return netlist, calculated_values, solver_notes, None
+
+
 @mcp.tool()
 def run_monte_carlo(
     circuit_id: str,
@@ -1032,7 +1191,7 @@ def run_monte_carlo(
     analysis_type: "ac", "transient", or "dc_op"
     tolerances: map component ref or prefix (R/C/L) to tol %.
     """
-    import random as _random
+    import random as _random  # nosec B311 — non-crypto PRNG for Monte Carlo simulation
 
     try:
         circuit = _manager.get(circuit_id)
@@ -1049,25 +1208,15 @@ def run_monte_carlo(
             "error": "No R/C/L components found in netlist",
         }
 
-    # Build analysis command from type + params
-    analysis_params: dict = {}
-    if start_freq is not None:
-        analysis_params["start_freq"] = start_freq
-    if stop_freq is not None:
-        analysis_params["stop_freq"] = stop_freq
-    if points_per_decade is not None:
-        analysis_params["points_per_decade"] = points_per_decade
-    if stop_time is not None:
-        analysis_params["stop_time"] = stop_time
-    if step_time is not None:
-        analysis_params["step_time"] = step_time
+    analysis_params = _build_analysis_params(
+        start_freq, stop_freq, points_per_decade, stop_time, step_time
+    )
 
     try:
         analysis_cmd = build_analysis_cmd(analysis_type, **analysis_params)
     except (ValueError, KeyError) as e:
         return {"status": "error", "error": str(e)}
 
-    # Build resolved tolerance map for reporting
     from spicebridge.monte_carlo import _resolve_tolerance
 
     tolerances_applied = {
@@ -1134,17 +1283,9 @@ def run_worst_case(
             "error": "No R/C/L components found in netlist",
         }
 
-    analysis_params: dict = {}
-    if start_freq is not None:
-        analysis_params["start_freq"] = start_freq
-    if stop_freq is not None:
-        analysis_params["stop_freq"] = stop_freq
-    if points_per_decade is not None:
-        analysis_params["points_per_decade"] = points_per_decade
-    if stop_time is not None:
-        analysis_params["stop_time"] = stop_time
-    if step_time is not None:
-        analysis_params["step_time"] = step_time
+    analysis_params = _build_analysis_params(
+        start_freq, stop_freq, points_per_decade, stop_time, step_time
+    )
 
     try:
         analysis_cmd = build_analysis_cmd(analysis_type, **analysis_params)
@@ -1163,70 +1304,28 @@ def run_worst_case(
     if nominal is None:
         return {"status": "error", "error": "Nominal simulation failed"}
 
-    n = len(components)
     num_runs = 1  # nominal
 
-    # 2. Sensitivity sweep: each component at +tol and -tol, others nominal
-    sensitivity_runs: list[tuple[str, int, dict]] = []
-    for idx, comp in enumerate(components):
-        for direction in (-1, 1):
-            corner = tuple(0 if j != idx else direction for j in range(n))
-            values = apply_corner(components, tolerances, default_tolerance_pct, corner)
-            modified = substitute_values(circuit.netlist, components, values)
-            result = run_single_sim(modified, analysis_cmd)
-            num_runs += 1
-            if result is not None:
-                sensitivity_runs.append((comp.ref, direction, result))
+    # 2. Sensitivity sweep
+    sensitivity_runs, sweep_runs = _run_sensitivity_sweep(
+        circuit.netlist, components, tolerances, default_tolerance_pct, analysis_cmd
+    )
+    num_runs += sweep_runs
 
     sensitivity = compute_sensitivity(
         nominal, components, sensitivity_runs, tolerances, default_tolerance_pct
     )
 
     # 3. Corner analysis
-    corner_results: list[tuple[tuple[int, ...], dict]] = []
-    if n <= 8:
-        # Exhaustive: run all 2^N corners
-        strategy = "exhaustive"
-        corners = generate_corners(n)
-        for corner in corners:
-            values = apply_corner(components, tolerances, default_tolerance_pct, corner)
-            modified = substitute_values(circuit.netlist, components, values)
-            result = run_single_sim(modified, analysis_cmd)
-            num_runs += 1
-            if result is not None:
-                corner_results.append((corner, result))
-    else:
-        # Sensitivity-guided: predict worst corners from sensitivity data
-        strategy = "sensitivity"
-        # For each metric, build a corner that maximizes/minimizes it
-        predicted_corners: set[tuple[int, ...]] = set()
-        for _metric_key, entries in sensitivity.items():
-            # Max corner: each component in direction of its sensitivity sign
-            max_corner = tuple(
-                1
-                if next(
-                    (e["pct_per_pct"] for e in entries if e["component"] == c.ref), 0
-                )
-                >= 0
-                else -1
-                for c in components
-            )
-            # Min corner: opposite
-            min_corner = tuple(-d for d in max_corner)
-            predicted_corners.add(max_corner)
-            predicted_corners.add(min_corner)
-
-        # Also add all-high and all-low
-        predicted_corners.add(tuple(1 for _ in range(n)))
-        predicted_corners.add(tuple(-1 for _ in range(n)))
-
-        for corner in predicted_corners:
-            values = apply_corner(components, tolerances, default_tolerance_pct, corner)
-            modified = substitute_values(circuit.netlist, components, values)
-            result = run_single_sim(modified, analysis_cmd)
-            num_runs += 1
-            if result is not None:
-                corner_results.append((corner, result))
+    corner_results, corner_runs, strategy = _run_corner_analysis(
+        circuit.netlist,
+        components,
+        tolerances,
+        default_tolerance_pct,
+        analysis_cmd,
+        sensitivity,
+    )
+    num_runs += corner_runs
 
     worst_case = compute_worst_case(
         nominal, corner_results, components, tolerances, default_tolerance_pct

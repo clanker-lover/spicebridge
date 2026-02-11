@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # nosec B405 — building SVG, not parsing untrusted XML
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -572,6 +572,121 @@ def _find_net_labels(
 
 
 # ---------------------------------------------------------------------------
+# SVG builder helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_svg_defs(
+    svg: ET.Element,
+    min_x: float,
+    min_y: float,
+    vb_w: float,
+    vb_h: float,
+) -> None:
+    """Create the stylesheet and background rect on the SVG element."""
+    # Stylesheet
+    style = ET.SubElement(svg, "style")
+    style.text = """
+        .comp-body { stroke: #4fc3f7; stroke-width: 1.5; fill: none; }
+        .component:hover .comp-body { stroke: #ffeb3b; }
+        .component:hover .comp-label { fill: #ffeb3b; }
+        .comp-label { fill: #81c784; font-family: monospace; font-size: 12px; }
+        .wire { stroke: #4fc3f7; stroke-width: 1.5; }
+        .wire:hover { stroke: #ffeb3b; }
+        .node-dot { fill: #4fc3f7; }
+        .ground-symbol .comp-body { stroke: #4fc3f7; stroke-width: 1.5; }
+        .net-label { fill: #ce93d8; font-family: monospace; font-size: 11px; }
+        .sim-annotation { fill: #ff8a65; font-family: monospace; font-size: 10px; }
+        .source-label { fill: #81c784; font-family: monospace; }
+        .highlight .comp-body { stroke: #ffeb3b !important; }
+        .highlight .comp-label { fill: #ffeb3b !important; }
+        .highlight { stroke: #ffeb3b !important; }
+    """
+
+    # Background
+    ET.SubElement(
+        svg,
+        "rect",
+        {
+            "x": str(min_x),
+            "y": str(min_y),
+            "width": str(vb_w),
+            "height": str(vb_h),
+            "fill": "#1e1e1e",
+        },
+    )
+
+
+def _render_components(
+    svg: ET.Element,
+    placed: list[_PlacedComponent],
+) -> dict[str, tuple[float, float]]:
+    """Draw component symbols with labels. Return node_positions dict."""
+    node_positions: dict[str, tuple[float, float]] = {}
+
+    for pc in placed:
+        comp = pc.component
+        g = ET.SubElement(
+            svg,
+            "g",
+            {
+                "id": f"component-{comp.ref}",
+                "data-ref": comp.ref,
+                "data-type": comp.comp_type,
+                "data-value": comp.value,
+                "class": "component",
+                "transform": f"translate({pc.x},{pc.y}) rotate({pc.rotation})",
+            },
+        )
+
+        # Draw symbol
+        drawer = _SYMBOL_DRAWERS.get(comp.comp_type, _generic_symbol)
+        for elem in drawer():
+            g.append(elem)
+
+        # Component label (outside rotation group so text is upright)
+        label = ET.SubElement(
+            svg,
+            "text",
+            {
+                "x": str(pc.x + 15),
+                "y": str(pc.y - 5),
+                "class": "comp-label",
+                "data-ref": comp.ref,
+            },
+        )
+        label.text = f"{comp.ref}: {comp.value}"
+
+        # Track pin positions for node map
+        pins = _compute_pin_positions(pc)
+        for idx, node in enumerate(pc.component.nodes):
+            if idx < len(pins):
+                node_positions.setdefault(node, pins[idx])
+
+    return node_positions
+
+
+def _render_wires(
+    svg: ET.Element,
+    wires: list[_Wire],
+) -> None:
+    """Draw wire paths as line elements with data-node attributes."""
+    for w in wires:
+        ET.SubElement(
+            svg,
+            "line",
+            {
+                "x1": str(w.start[0]),
+                "y1": str(w.start[1]),
+                "x2": str(w.end[0]),
+                "y2": str(w.end[1]),
+                "class": "wire",
+                "data-node": w.node,
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
 # SVG builder
 # ---------------------------------------------------------------------------
 
@@ -620,6 +735,7 @@ def _build_svg(
     vb_w = max_x - min_x
     vb_h = max_y - min_y
 
+    # Create the svg element
     svg = ET.Element(
         "svg",
         {
@@ -631,95 +747,14 @@ def _build_svg(
         },
     )
 
-    # Stylesheet
-    style = ET.SubElement(svg, "style")
-    style.text = """
-        .comp-body { stroke: #4fc3f7; stroke-width: 1.5; fill: none; }
-        .component:hover .comp-body { stroke: #ffeb3b; }
-        .component:hover .comp-label { fill: #ffeb3b; }
-        .comp-label { fill: #81c784; font-family: monospace; font-size: 12px; }
-        .wire { stroke: #4fc3f7; stroke-width: 1.5; }
-        .wire:hover { stroke: #ffeb3b; }
-        .node-dot { fill: #4fc3f7; }
-        .ground-symbol .comp-body { stroke: #4fc3f7; stroke-width: 1.5; }
-        .net-label { fill: #ce93d8; font-family: monospace; font-size: 11px; }
-        .sim-annotation { fill: #ff8a65; font-family: monospace; font-size: 10px; }
-        .source-label { fill: #81c784; font-family: monospace; }
-        .highlight .comp-body { stroke: #ffeb3b !important; }
-        .highlight .comp-label { fill: #ffeb3b !important; }
-        .highlight { stroke: #ffeb3b !important; }
-    """
+    # Style and background
+    _build_svg_defs(svg, min_x, min_y, vb_w, vb_h)
 
-    # Background
-    ET.SubElement(
-        svg,
-        "rect",
-        {
-            "x": str(min_x),
-            "y": str(min_y),
-            "width": str(vb_w),
-            "height": str(vb_h),
-            "fill": "#1e1e1e",
-        },
-    )
-
-    # Build a map of node positions for annotations
-    node_positions: dict[str, tuple[float, float]] = {}
-
-    # Draw components
-    for pc in placed:
-        comp = pc.component
-        g = ET.SubElement(
-            svg,
-            "g",
-            {
-                "id": f"component-{comp.ref}",
-                "data-ref": comp.ref,
-                "data-type": comp.comp_type,
-                "data-value": comp.value,
-                "class": "component",
-                "transform": f"translate({pc.x},{pc.y}) rotate({pc.rotation})",
-            },
-        )
-
-        # Draw symbol
-        drawer = _SYMBOL_DRAWERS.get(comp.comp_type, _generic_symbol)
-        for elem in drawer():
-            g.append(elem)
-
-        # Component label (outside rotation group so text is upright)
-        label = ET.SubElement(
-            svg,
-            "text",
-            {
-                "x": str(pc.x + 15),
-                "y": str(pc.y - 5),
-                "class": "comp-label",
-                "data-ref": comp.ref,
-            },
-        )
-        label.text = f"{comp.ref}: {comp.value}"
-
-        # Track pin positions for node map
-        pins = _compute_pin_positions(pc)
-        for idx, node in enumerate(pc.component.nodes):
-            if idx < len(pins):
-                node_positions.setdefault(node, pins[idx])
+    # Draw components and labels, get node position map
+    node_positions = _render_components(svg, placed)
 
     # Draw wires
-    for w in wires:
-        ET.SubElement(
-            svg,
-            "line",
-            {
-                "x1": str(w.start[0]),
-                "y1": str(w.start[1]),
-                "x2": str(w.end[0]),
-                "y2": str(w.end[1]),
-                "class": "wire",
-                "data-node": w.node,
-            },
-        )
+    _render_wires(svg, wires)
 
     # Draw junction dots (node-dots)
     for jx, jy in junctions:

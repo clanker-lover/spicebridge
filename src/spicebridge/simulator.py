@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
+import subprocess  # nosec B404 — used with list args, no shell=True
 import tempfile
 from pathlib import Path
 
@@ -32,7 +32,7 @@ def _run_via_spicelib(netlist_file: Path, raw_file: Path) -> bool:
 def _run_via_subprocess(netlist_file: Path, raw_file: Path) -> bool:
     """Run ngspice directly via subprocess as a fallback."""
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 B607 — list args, no shell, trusted binary
             ["ngspice", "-b", "-r", str(raw_file), str(netlist_file)],
             capture_output=True,
             timeout=60,
@@ -107,7 +107,7 @@ def validate_netlist_syntax(netlist: str) -> tuple[bool, list[str]]:
     netlist_file.write_text(netlist)
 
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 B607 — list args, no shell, trusted binary
             ["ngspice", "-b", str(netlist_file)],
             capture_output=True,
             text=True,

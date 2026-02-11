@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import importlib.resources
+import importlib.resources  # nosemgrep: python37-compatibility-importlib2
 import json
 import logging
 import threading
@@ -22,6 +22,24 @@ from spicebridge.schematic import parse_netlist
 from spicebridge.svg_renderer import render_svg
 
 logger = logging.getLogger(__name__)
+
+_MAX_WS_CLIENTS = 50
+_MAX_EVENT_LOG = 1000
+
+
+@web.middleware
+async def security_headers(request: web.Request, handler):
+    """Add security headers to all HTTP responses."""
+    response = await handler(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'unsafe-inline'; "
+        "style-src 'unsafe-inline'; img-src 'self' data:"
+    )
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 
 # Module-level singleton
 _server: _ViewerServer | None = None
@@ -50,7 +68,7 @@ class _ViewerServer:
     # ------------------------------------------------------------------
 
     def _build_app(self) -> web.Application:
-        app = web.Application()
+        app = web.Application(middlewares=[security_headers])
         app.router.add_get("/", self._handle_index)
         app.router.add_get("/api/circuits", self._handle_list_circuits)
         app.router.add_get("/api/circuit/{id}", self._handle_get_circuit)
@@ -113,6 +131,24 @@ class _ViewerServer:
         return web.json_response({"results": state.last_results})
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
+        # Connection limit
+        if len(self._ws_clients) >= _MAX_WS_CLIENTS:
+            raise web.HTTPServiceUnavailable(text="Too many WebSocket connections")
+
+        # Origin validation
+        origin = request.headers.get("Origin")
+        if origin:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(origin)
+            expected_host = request.host.split(":")[0]
+            if parsed.hostname and parsed.hostname not in (
+                expected_host,
+                "localhost",
+                "127.0.0.1",
+            ):
+                raise web.HTTPForbidden(text="Invalid WebSocket origin")
+
         ws_resp = web.WebSocketResponse()
         await ws_resp.prepare(request)
         self._ws_clients.append(ws_resp)
@@ -130,6 +166,8 @@ class _ViewerServer:
     def notify_change(self, event: dict[str, Any]) -> None:
         """Record an event for broadcast. Safe to call from any thread."""
         with self._event_lock:
+            if len(self._event_log) >= _MAX_EVENT_LOG:
+                self._event_log = self._event_log[-(_MAX_EVENT_LOG // 2) :]
             self._event_log.append(event)
 
     async def _broadcast_loop(self) -> None:

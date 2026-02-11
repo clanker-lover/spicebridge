@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import importlib.resources
+import importlib.resources  # nosemgrep: python37-compatibility-importlib2
 import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+from spicebridge.sanitize import validate_component_value
 
 
 @dataclass
@@ -89,7 +91,8 @@ class TemplateManager:
     def list_templates(self, category: str | None = None) -> list[dict]:
         """Return summary dicts of all templates, optionally filtered by category."""
         self._ensure_loaded()
-        assert self._templates is not None
+        if self._templates is None:
+            raise RuntimeError("Template loading failed unexpectedly")
         result = []
         for t in self._templates.values():
             if category is not None and t.category != category:
@@ -108,7 +111,8 @@ class TemplateManager:
     def get_template(self, template_id: str) -> Template:
         """Get a template by ID. Raises KeyError if not found."""
         self._ensure_loaded()
-        assert self._templates is not None
+        if self._templates is None:
+            raise RuntimeError("Template loading failed unexpectedly")
         if template_id not in self._templates:
             raise KeyError(f"Template '{template_id}' not found")
         return self._templates[template_id]
@@ -131,6 +135,9 @@ def substitute_params(netlist: str, params: dict[str, str]) -> str:
     if not params:
         return netlist
 
+    for val in params.values():
+        validate_component_value(str(val))
+
     lines = []
     for line in netlist.splitlines():
         m = _PARAM_RE.match(line)
@@ -150,6 +157,8 @@ def modify_component_in_netlist(netlist: str, component: str, value: str) -> str
        replace its last token (the value field).
     3. Raises ValueError if *component* is not found in the netlist.
     """
+    validate_component_value(value)
+
     # Try .param line first
     found = False
     lines = netlist.splitlines()

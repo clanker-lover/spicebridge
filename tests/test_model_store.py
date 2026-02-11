@@ -154,26 +154,25 @@ class TestIntegrationOpAmp:
 
     def test_opamp_inverting_amp(self, tmp_path):
         from spicebridge.server import (
+            _models,
             create_circuit,
             run_ac_analysis,
         )
 
-        store = ModelStore(base_dir=tmp_path)
         model = generate_model("opamp", "TestAmp")
-        lib_path = store.save(model)
+        _models.save(model)
 
         netlist = (
-            f"Inverting Amplifier\n"
-            f".include {lib_path}\n"
-            f"Vcc vcc 0 DC 15\n"
-            f"Vee vee 0 DC -15\n"
-            f"Vin in 0 AC 1\n"
-            f"R1 in inv_in 10k\n"
-            f"Rf inv_in out 100k\n"
-            f"XU1 0 inv_in out vcc vee TestAmp\n"
+            "Inverting Amplifier\n"
+            "Vcc vcc 0 DC 15\n"
+            "Vee vee 0 DC -15\n"
+            "Vin in 0 AC 1\n"
+            "R1 in inv_in 10k\n"
+            "Rf inv_in out 100k\n"
+            "XU1 0 inv_in out vcc vee TestAmp\n"
         )
 
-        result = create_circuit(netlist)
+        result = create_circuit(netlist, models=["TestAmp"])
         assert result["status"] == "ok"
         circuit_id = result["circuit_id"]
 
@@ -188,22 +187,20 @@ class TestIntegrationBJT:
     """Generate NPN → common-emitter → DC OP → active region."""
 
     def test_bjt_common_emitter(self, tmp_path):
-        from spicebridge.server import create_circuit, run_dc_op
+        from spicebridge.server import _models, create_circuit, run_dc_op
 
-        store = ModelStore(base_dir=tmp_path)
         model = generate_model("bjt", "QTest", {"type": "NPN"})
-        lib_path = store.save(model)
+        _models.save(model)
 
         netlist = (
-            f"Common Emitter Amplifier\n"
-            f".include {lib_path}\n"
-            f"Vcc vcc 0 DC 12\n"
-            f"Rc vcc col 4.7k\n"
-            f"Rb vcc base 470k\n"
-            f"Q1 col base 0 QTest\n"
+            "Common Emitter Amplifier\n"
+            "Vcc vcc 0 DC 12\n"
+            "Rc vcc col 4.7k\n"
+            "Rb vcc base 470k\n"
+            "Q1 col base 0 QTest\n"
         )
 
-        result = create_circuit(netlist)
+        result = create_circuit(netlist, models=["QTest"])
         assert result["status"] == "ok"
         circuit_id = result["circuit_id"]
 
@@ -224,23 +221,19 @@ class TestIntegrationDiode:
 
     def test_diode_half_wave(self, tmp_path):
         from spicebridge.server import (
+            _models,
             create_circuit,
             run_transient,
         )
 
-        store = ModelStore(base_dir=tmp_path)
         model = generate_model("diode", "DTest")
-        lib_path = store.save(model)
+        _models.save(model)
 
         netlist = (
-            f"Half Wave Rectifier\n"
-            f".include {lib_path}\n"
-            f"Vin in 0 SIN(0 5 1k)\n"
-            f"D1 in out DTest\n"
-            f"R1 out 0 1k\n"
+            "Half Wave Rectifier\nVin in 0 SIN(0 5 1k)\nD1 in out DTest\nR1 out 0 1k\n"
         )
 
-        result = create_circuit(netlist)
+        result = create_circuit(netlist, models=["DTest"])
         assert result["status"] == "ok"
         circuit_id = result["circuit_id"]
 

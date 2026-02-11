@@ -242,15 +242,14 @@ _GAIN_LINEAR_RE = re.compile(
 )
 
 
-def _extract_params(text: str, intent: str) -> tuple[dict[str, float], list[str]]:
-    """Extract numerical parameters with units from *text*.
+def _collect_numeric_values(
+    text: str,
+) -> tuple[list[float], list[float], list[float], list[float]]:
+    """Parse number+unit pairs from *text* into categorized buckets.
 
-    Returns (specs, warnings).
+    Returns (freq_values, db_values, volt_values, ohm_values) as 4 lists
+    of floats.
     """
-    specs: dict[str, float] = {}
-    warnings: list[str] = []
-
-    # Collect all (value, unit) pairs
     freq_values: list[float] = []
     db_values: list[float] = []
     volt_values: list[float] = []
@@ -282,7 +281,22 @@ def _extract_params(text: str, intent: str) -> tuple[dict[str, float], list[str]
         elif base_unit in ("F", "H"):
             pass  # not mapped to a spec currently
 
-    # Map collected values to specs based on intent
+    return freq_values, db_values, volt_values, ohm_values
+
+
+def _map_values_to_specs(
+    intent: str,
+    freq_values: list[float],
+    db_values: list[float],
+    volt_values: list[float],
+    ohm_values: list[float],
+) -> dict[str, float]:
+    """Map collected numeric values to specs based on intent.
+
+    Returns specs dict.
+    """
+    specs: dict[str, float] = {}
+
     if intent == "design_filter":
         if freq_values:
             specs["_freq_hz"] = freq_values[0]
@@ -317,6 +331,24 @@ def _extract_params(text: str, intent: str) -> tuple[dict[str, float], list[str]
         if ohm_values:
             specs["input_impedance_ohms"] = ohm_values[0]
 
+    return specs
+
+
+def _extract_params(text: str, intent: str) -> tuple[dict[str, float], list[str]]:
+    """Extract numerical parameters with units from *text*.
+
+    Returns (specs, warnings).
+    """
+    warnings: list[str] = []
+
+    # Collect all (value, unit) pairs into categorized buckets
+    freq_values, db_values, volt_values, ohm_values = _collect_numeric_values(text)
+
+    # Map collected values to specs based on intent
+    specs = _map_values_to_specs(
+        intent, freq_values, db_values, volt_values, ohm_values
+    )
+
     # Context-sensitive extractions
     q_match = _Q_RE.search(text)
     if q_match:
@@ -336,7 +368,7 @@ def _extract_params(text: str, intent: str) -> tuple[dict[str, float], list[str]
         if gl_match:
             specs["gain_linear"] = float(gl_match.group(1))
     else:
-        # Check if there's also a bare gain → warn
+        # Check if there's also a bare gain -> warn
         gl_match = _GAIN_LINEAR_RE.search(text)
         if gl_match:
             warnings.append("Both gain_dB and gain_linear detected; using gain_dB.")
@@ -576,6 +608,26 @@ def _match_amplifier(text: str, specs: dict[str, float]) -> str:
     return "inverting_opamp"
 
 
+def _finalize_freq_spec(specs: dict[str, float], template_id: str) -> None:
+    """Rename or pop ``_freq_hz`` in *specs* based on template info.
+
+    When *template_id* is in ``_TEMPLATE_REGISTRY``, if the template has
+    ``freq_spec_name``, rename ``_freq_hz`` to it; otherwise pop
+    ``_freq_hz``.  Modifies *specs* in place.
+    """
+    if "_freq_hz" not in specs:
+        return
+
+    if template_id in _TEMPLATE_REGISTRY:
+        info = _TEMPLATE_REGISTRY[template_id]
+        if info.freq_spec_name:
+            specs[info.freq_spec_name] = specs.pop("_freq_hz")
+        else:
+            specs.pop("_freq_hz")
+    else:
+        specs.pop("_freq_hz")
+
+
 def _resolve_template(
     intent: str, text: str, specs: dict[str, float]
 ) -> tuple[str | None, dict[str, float], list[str]]:
@@ -587,24 +639,14 @@ def _resolve_template(
         filter_type, order = _match_filter(text, specs)
         key = (filter_type, order)
         template_id = _FILTER_TEMPLATE_MAP.get(key)
-        if template_id and template_id in _TEMPLATE_REGISTRY:
-            info = _TEMPLATE_REGISTRY[template_id]
-            # Rename _freq_hz to the template's correct spec name
-            if "_freq_hz" in specs and info.freq_spec_name:
-                specs[info.freq_spec_name] = specs.pop("_freq_hz")
-            elif "_freq_hz" in specs:
-                specs.pop("_freq_hz")
+        if template_id:
+            _finalize_freq_spec(specs, template_id)
         tools = _TOOL_SEQUENCES["design_filter"]
         return template_id, specs, tools
 
     if intent == "design_amplifier":
         template_id = _match_amplifier(text, specs)
-        if template_id in _TEMPLATE_REGISTRY:
-            info = _TEMPLATE_REGISTRY[template_id]
-            if "_freq_hz" in specs and info.freq_spec_name:
-                specs[info.freq_spec_name] = specs.pop("_freq_hz")
-            elif "_freq_hz" in specs:
-                specs.pop("_freq_hz")
+        _finalize_freq_spec(specs, template_id)
         if template_id == "voltage_divider":
             tools = _TOOL_SEQUENCES["voltage_divider"]
         else:

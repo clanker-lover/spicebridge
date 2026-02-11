@@ -173,7 +173,13 @@ header h1 { font-size: 16px; font-weight: 600; color: #4fc3f7; }
             const svgText = await resp.text();
             // Remove old SVG
             if (svgElement) svgElement.remove();
-            area.insertAdjacentHTML('beforeend', svgText);
+            // Safe SVG insertion via DOMParser (prevents XSS from injected scripts)
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(svgText, 'image/svg+xml');
+            const parsedSvg = doc.documentElement;
+            // Remove any script elements as defense-in-depth
+            parsedSvg.querySelectorAll('script').forEach(s => s.remove());
+            area.appendChild(document.importNode(parsedSvg, true));
             svgElement = area.querySelector('svg');
             if (svgElement) {
                 const vb = svgElement.getAttribute('viewBox');
