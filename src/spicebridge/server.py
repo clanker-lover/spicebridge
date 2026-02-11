@@ -9,6 +9,18 @@ from mcp.server.fastmcp import FastMCP
 from spicebridge.circuit_manager import CircuitManager
 from spicebridge.model_generator import generate_model
 from spicebridge.model_store import ModelStore
+from spicebridge.monte_carlo import (
+    apply_corner,
+    build_analysis_cmd,
+    compute_sensitivity,
+    compute_statistics,
+    compute_worst_case,
+    generate_corners,
+    parse_component_values,
+    randomize_values,
+    run_single_sim,
+    substitute_values,
+)
 from spicebridge.parser import (
     parse_results,
     read_ac_at_frequency,
@@ -17,7 +29,11 @@ from spicebridge.parser import (
 from spicebridge.schematic import draw_schematic as _draw_schematic
 from spicebridge.simulator import run_simulation, validate_netlist_syntax
 from spicebridge.solver import solve as _solve_components
-from spicebridge.standard_values import format_engineering, snap_to_standard
+from spicebridge.standard_values import (
+    format_engineering,
+    parse_spice_value,
+    snap_to_standard,
+)
 from spicebridge.template_manager import (
     TemplateManager,
     modify_component_in_netlist,
@@ -239,7 +255,7 @@ def load_template(
                 if raw_val in ("open", "0"):
                     solver_params[name] = raw_val
                 else:
-                    numeric = _parse_spice_value(str(raw_val))
+                    numeric = parse_spice_value(str(raw_val))
                     snapped = snap_to_standard(numeric, "E24")
                     solver_params[name] = format_engineering(snapped)
             calculated_values = dict(solver_params)
@@ -364,30 +380,10 @@ def _get_source_voltage(netlist: str, source_name: str) -> float | None:
     for m in _SOURCE_DC_RE.finditer(netlist):
         if m.group(1).lower() == source_name.lower():
             try:
-                return _parse_spice_value(m.group(2))
+                return parse_spice_value(m.group(2))
             except ValueError:
                 return None
     return None
-
-
-def _parse_spice_value(s: str) -> float:
-    """Convert a SPICE value string (e.g., '1k', '100n') to a float."""
-    suffixes = {
-        "t": 1e12,
-        "g": 1e9,
-        "meg": 1e6,
-        "k": 1e3,
-        "m": 1e-3,
-        "u": 1e-6,
-        "n": 1e-9,
-        "p": 1e-12,
-        "f": 1e-15,
-    }
-    s = s.strip().lower()
-    for suffix, mult in sorted(suffixes.items(), key=lambda x: -len(x[0])):
-        if s.endswith(suffix):
-            return float(s[: -len(suffix)]) * mult
-    return float(s)
 
 
 # Mapping from user-facing spec names to (analysis_type, result_key)
@@ -840,6 +836,239 @@ def list_models() -> dict:
     return {
         "status": "ok",
         "models": _models.list_models(),
+    }
+
+
+@mcp.tool()
+def run_monte_carlo(
+    circuit_id: str,
+    analysis_type: str,
+    num_runs: int = 100,
+    tolerances: dict | None = None,
+    default_tolerance_pct: float = 5.0,
+    seed: int | None = None,
+    start_freq: float | None = None,
+    stop_freq: float | None = None,
+    points_per_decade: int | None = None,
+    stop_time: float | None = None,
+    step_time: float | None = None,
+) -> dict:
+    """Run Monte Carlo analysis under component tolerances.
+
+    Randomly varies R/C/L component values within tolerance bands
+    and runs multiple simulations to produce statistical results.
+
+    analysis_type: "ac", "transient", or "dc_op"
+    tolerances: map component ref or prefix (R/C/L) to tol %.
+    """
+    import random as _random
+
+    try:
+        circuit = _manager.get(circuit_id)
+    except KeyError as e:
+        return {"status": "error", "error": str(e)}
+
+    if not 1 <= num_runs <= 1000:
+        return {"status": "error", "error": "num_runs must be between 1 and 1000"}
+
+    components = parse_component_values(circuit.netlist)
+    if not components:
+        return {
+            "status": "error",
+            "error": "No R/C/L components found in netlist",
+        }
+
+    # Build analysis command from type + params
+    analysis_params: dict = {}
+    if start_freq is not None:
+        analysis_params["start_freq"] = start_freq
+    if stop_freq is not None:
+        analysis_params["stop_freq"] = stop_freq
+    if points_per_decade is not None:
+        analysis_params["points_per_decade"] = points_per_decade
+    if stop_time is not None:
+        analysis_params["stop_time"] = stop_time
+    if step_time is not None:
+        analysis_params["step_time"] = step_time
+
+    try:
+        analysis_cmd = build_analysis_cmd(analysis_type, **analysis_params)
+    except (ValueError, KeyError) as e:
+        return {"status": "error", "error": str(e)}
+
+    # Build resolved tolerance map for reporting
+    from spicebridge.monte_carlo import _resolve_tolerance
+
+    tolerances_applied = {
+        c.ref: _resolve_tolerance(c.ref, tolerances, default_tolerance_pct)
+        for c in components
+    }
+
+    rng = _random.Random(seed)
+    all_results: list[dict] = []
+    failures: list[dict] = []
+
+    for i in range(num_runs):
+        values = randomize_values(components, tolerances, default_tolerance_pct, rng)
+        modified_netlist = substitute_values(circuit.netlist, components, values)
+        result = run_single_sim(modified_netlist, analysis_cmd)
+        if result is not None:
+            all_results.append(result)
+        else:
+            failures.append({"run": i, "error": "Simulation failed"})
+
+    statistics = compute_statistics(all_results)
+
+    return {
+        "status": "ok",
+        "num_runs": num_runs,
+        "num_successful": len(all_results),
+        "num_failed": len(failures),
+        "analysis_type": analysis_type,
+        "tolerances_applied": tolerances_applied,
+        "statistics": statistics,
+        "failures": failures,
+    }
+
+
+@mcp.tool()
+def run_worst_case(
+    circuit_id: str,
+    analysis_type: str,
+    tolerances: dict | None = None,
+    default_tolerance_pct: float = 5.0,
+    start_freq: float | None = None,
+    stop_freq: float | None = None,
+    points_per_decade: int | None = None,
+    stop_time: float | None = None,
+    step_time: float | None = None,
+) -> dict:
+    """Run worst-case analysis at tolerance extremes.
+
+    Evaluates component sensitivity and deterministic corner
+    combinations to find true worst-case performance bounds.
+
+    analysis_type: "ac", "transient", or "dc_op"
+    tolerances: map component ref or prefix (R/C/L) to tol %.
+    """
+    try:
+        circuit = _manager.get(circuit_id)
+    except KeyError as e:
+        return {"status": "error", "error": str(e)}
+
+    components = parse_component_values(circuit.netlist)
+    if not components:
+        return {
+            "status": "error",
+            "error": "No R/C/L components found in netlist",
+        }
+
+    analysis_params: dict = {}
+    if start_freq is not None:
+        analysis_params["start_freq"] = start_freq
+    if stop_freq is not None:
+        analysis_params["stop_freq"] = stop_freq
+    if points_per_decade is not None:
+        analysis_params["points_per_decade"] = points_per_decade
+    if stop_time is not None:
+        analysis_params["stop_time"] = stop_time
+    if step_time is not None:
+        analysis_params["step_time"] = step_time
+
+    try:
+        analysis_cmd = build_analysis_cmd(analysis_type, **analysis_params)
+    except (ValueError, KeyError) as e:
+        return {"status": "error", "error": str(e)}
+
+    from spicebridge.monte_carlo import _resolve_tolerance
+
+    tolerances_applied = {
+        c.ref: _resolve_tolerance(c.ref, tolerances, default_tolerance_pct)
+        for c in components
+    }
+
+    # 1. Run nominal simulation
+    nominal = run_single_sim(circuit.netlist, analysis_cmd)
+    if nominal is None:
+        return {"status": "error", "error": "Nominal simulation failed"}
+
+    n = len(components)
+    num_runs = 1  # nominal
+
+    # 2. Sensitivity sweep: each component at +tol and -tol, others nominal
+    sensitivity_runs: list[tuple[str, int, dict]] = []
+    for idx, comp in enumerate(components):
+        for direction in (-1, 1):
+            corner = tuple(0 if j != idx else direction for j in range(n))
+            values = apply_corner(components, tolerances, default_tolerance_pct, corner)
+            modified = substitute_values(circuit.netlist, components, values)
+            result = run_single_sim(modified, analysis_cmd)
+            num_runs += 1
+            if result is not None:
+                sensitivity_runs.append((comp.ref, direction, result))
+
+    sensitivity = compute_sensitivity(
+        nominal, components, sensitivity_runs, tolerances, default_tolerance_pct
+    )
+
+    # 3. Corner analysis
+    corner_results: list[tuple[tuple[int, ...], dict]] = []
+    if n <= 8:
+        # Exhaustive: run all 2^N corners
+        strategy = "exhaustive"
+        corners = generate_corners(n)
+        for corner in corners:
+            values = apply_corner(components, tolerances, default_tolerance_pct, corner)
+            modified = substitute_values(circuit.netlist, components, values)
+            result = run_single_sim(modified, analysis_cmd)
+            num_runs += 1
+            if result is not None:
+                corner_results.append((corner, result))
+    else:
+        # Sensitivity-guided: predict worst corners from sensitivity data
+        strategy = "sensitivity"
+        # For each metric, build a corner that maximizes/minimizes it
+        predicted_corners: set[tuple[int, ...]] = set()
+        for _metric_key, entries in sensitivity.items():
+            # Max corner: each component in direction of its sensitivity sign
+            max_corner = tuple(
+                1
+                if next(
+                    (e["pct_per_pct"] for e in entries if e["component"] == c.ref), 0
+                )
+                >= 0
+                else -1
+                for c in components
+            )
+            # Min corner: opposite
+            min_corner = tuple(-d for d in max_corner)
+            predicted_corners.add(max_corner)
+            predicted_corners.add(min_corner)
+
+        # Also add all-high and all-low
+        predicted_corners.add(tuple(1 for _ in range(n)))
+        predicted_corners.add(tuple(-1 for _ in range(n)))
+
+        for corner in predicted_corners:
+            values = apply_corner(components, tolerances, default_tolerance_pct, corner)
+            modified = substitute_values(circuit.netlist, components, values)
+            result = run_single_sim(modified, analysis_cmd)
+            num_runs += 1
+            if result is not None:
+                corner_results.append((corner, result))
+
+    worst_case = compute_worst_case(
+        nominal, corner_results, components, tolerances, default_tolerance_pct
+    )
+
+    return {
+        "status": "ok",
+        "nominal": nominal,
+        "worst_case": worst_case,
+        "sensitivity": sensitivity,
+        "strategy": strategy,
+        "num_runs": num_runs,
+        "tolerances_applied": tolerances_applied,
     }
 
 

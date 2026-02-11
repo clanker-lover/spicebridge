@@ -208,3 +208,23 @@ def format_engineering(value: float) -> str:
 
     # Fallback for extremely small values
     return f"{value:.3g}"
+
+
+def parse_spice_value(s: str) -> float:
+    """Convert a SPICE value string (e.g., '1k', '100n') to a float."""
+    suffixes = {
+        "t": 1e12,
+        "g": 1e9,
+        "meg": 1e6,
+        "k": 1e3,
+        "m": 1e-3,
+        "u": 1e-6,
+        "n": 1e-9,
+        "p": 1e-12,
+        "f": 1e-15,
+    }
+    s = s.strip().lower()
+    for suffix, mult in sorted(suffixes.items(), key=lambda x: -len(x[0])):
+        if s.endswith(suffix):
+            return float(s[: -len(suffix)]) * mult
+    return float(s)

@@ -186,7 +186,7 @@ def test_load_template_specs_values_are_e24():
     """Calculated values should be snapped to E24 standard values."""
     result = load_template("rc_lowpass_1st", specs={"f_cutoff_hz": 1000})
     assert result["status"] == "ok"
-    from spicebridge.server import _parse_spice_value
+    from spicebridge.standard_values import parse_spice_value as _parse_spice_value
 
     for name, val_str in result["calculated_values"].items():
         numeric = _parse_spice_value(val_str)
