@@ -377,6 +377,31 @@ class TestWebViewerSecurity:
         ws = await cli.ws_connect(f"/ws?token={auth_token}")
         await ws.close()
 
+    def test_ws_clients_is_set(self, viewer_server):
+        assert isinstance(viewer_server._ws_clients, set)
+
+    def test_ws_client_discard_missing_no_error(self, viewer_server):
+        # Discarding a non-present client should not raise
+        viewer_server._ws_clients.discard("fake")
+
+    def test_event_log_is_bounded_deque(self, viewer_server):
+        import collections
+
+        assert isinstance(viewer_server._event_log, collections.deque)
+        assert viewer_server._event_log.maxlen == 1000
+
+    def test_event_log_does_not_exceed_maxlen(self, viewer_server):
+        for i in range(1500):
+            viewer_server.notify_change({"i": i})
+        assert len(viewer_server._event_log) == 1000
+
+    @pytest.mark.asyncio
+    async def test_csp_no_unsafe_inline_script(self, cli):
+        resp = await cli.get("/")
+        csp = resp.headers["Content-Security-Policy"]
+        assert "'unsafe-inline'" not in csp.split("script-src")[1].split(";")[0]
+        assert "sha256-" in csp
+
     @pytest.mark.asyncio
     async def test_no_directory_traversal_via_url(self, cli, auth_token):
         for path in ["/../../etc/passwd", "/static/../secret"]:
@@ -681,3 +706,24 @@ class TestErrorSanitization:
         if result["status"] == "ok":
             assert "/home/" not in result["filepath"]
             assert "/tmp/" not in result["filepath"]
+
+
+# ===========================================================================
+# Class 16: Port Validation
+# ===========================================================================
+
+
+class TestPortValidation:
+    """Verify open_viewer rejects invalid port numbers."""
+
+    def test_open_viewer_rejects_privileged_port(self):
+        from spicebridge.server import open_viewer
+
+        result = open_viewer(port=80)
+        assert "error" in result
+
+    def test_open_viewer_rejects_out_of_range_port(self):
+        from spicebridge.server import open_viewer
+
+        result = open_viewer(port=70000)
+        assert "error" in result

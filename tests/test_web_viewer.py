@@ -171,5 +171,5 @@ class TestViewerTokenAuth:
     async def test_token_injected_in_html(self, cli, auth_token):
         resp = await cli.get("/")
         text = await resp.text()
-        assert "__SPICEBRIDGE_TOKEN" in text
+        assert "spicebridge-token" in text
         assert auth_token in text

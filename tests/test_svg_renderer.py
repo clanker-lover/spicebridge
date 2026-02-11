@@ -146,3 +146,13 @@ class TestBJTCircuit:
     def test_bjt_svg_valid_xml(self):
         svg = render_svg(BJT_AMP)
         ET.fromstring(svg)
+
+
+class TestSvgXssEscaping:
+    """Verify SVG rendering escapes user-controlled content."""
+
+    def test_svg_escapes_script_in_value(self):
+        netlist = "* XSS test\nR1 a 0 <script>alert(1)</script>\n.end\n"
+        svg = render_svg(netlist)
+        assert "<script>" not in svg
+        assert "&lt;script&gt;" in svg

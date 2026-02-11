@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import collections
+import hashlib
 import hmac
 import importlib.resources  # nosemgrep: python37-compatibility-importlib2
 import json
@@ -29,18 +32,22 @@ _MAX_WS_CLIENTS = 50
 _MAX_EVENT_LOG = 1000
 
 
-@web.middleware
-async def security_headers(request: web.Request, handler):
-    """Add security headers to all HTTP responses."""
-    response = await handler(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; script-src 'unsafe-inline'; "
-        "style-src 'unsafe-inline'; img-src 'self' data:"
-    )
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    return response
+def _make_security_headers_middleware(script_hash: str):
+    """Return an aiohttp middleware that sets security headers including CSP."""
+
+    @web.middleware
+    async def security_headers(request: web.Request, handler):
+        response = await handler(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = (
+            f"default-src 'self'; script-src 'sha256-{script_hash}'; "
+            "style-src 'unsafe-inline'; img-src 'self' data:"
+        )
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+    return security_headers
 
 
 def _make_token_auth_middleware(auth_token: str):
@@ -83,8 +90,10 @@ class _ViewerServer:
         self.host = host
         self.port = port
         self._auth_token: str = secrets.token_urlsafe(32)
-        self._ws_clients: list[web.WebSocketResponse] = []
-        self._event_log: list[dict] = []
+        self._ws_clients: set[web.WebSocketResponse] = set()
+        self._event_log: collections.deque[dict] = collections.deque(
+            maxlen=_MAX_EVENT_LOG
+        )
         self._event_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -97,9 +106,21 @@ class _ViewerServer:
     # Routes
     # ------------------------------------------------------------------
 
+    def _compute_script_hash(self) -> str:
+        """Compute SHA-256 hash of the inline script in viewer.html for CSP."""
+        ref = importlib.resources.files("spicebridge.static").joinpath("viewer.html")
+        html = ref.read_text(encoding="utf-8")
+        start = html.index("<script>") + len("<script>")
+        end = html.index("</script>")
+        script_content = html[start:end]
+        digest = hashlib.sha256(script_content.encode("utf-8")).digest()
+        return base64.b64encode(digest).decode("ascii")
+
     def _build_app(self) -> web.Application:
+        script_hash = self._compute_script_hash()
+        sec_headers = _make_security_headers_middleware(script_hash)
         token_auth = _make_token_auth_middleware(self._auth_token)
-        app = web.Application(middlewares=[security_headers, token_auth])
+        app = web.Application(middlewares=[sec_headers, token_auth])
         app.router.add_get("/", self._handle_index)
         app.router.add_get("/api/circuits", self._handle_list_circuits)
         app.router.add_get("/api/circuit/{id}", self._handle_get_circuit)
@@ -112,10 +133,8 @@ class _ViewerServer:
         ref = importlib.resources.files("spicebridge.static").joinpath("viewer.html")
         html = ref.read_text(encoding="utf-8")
         # Inject auth token so JS can authenticate API/WS requests
-        token_script = (
-            f'<script>window.__SPICEBRIDGE_TOKEN = "{self._auth_token}";</script>'
-        )
-        html = html.replace("</head>", f"{token_script}\n</head>")
+        token_meta = f'<meta name="spicebridge-token" content="{self._auth_token}">'
+        html = html.replace("</head>", f"{token_meta}\n</head>")
         return web.Response(text=html, content_type="text/html")
 
     async def _handle_list_circuits(self, _request: web.Request) -> web.Response:
@@ -184,15 +203,28 @@ class _ViewerServer:
                 "127.0.0.1",
             ):
                 raise web.HTTPForbidden(text="Invalid WebSocket origin")
+        else:
+            # No Origin header — only allow if auth token is explicitly present.
+            # The token_auth middleware already validated, but this makes the
+            # requirement explicit as defense-in-depth.
+            token = request.query.get("token")
+            if not token:
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    token = auth_header[7:]
+            if not token:
+                raise web.HTTPForbidden(
+                    text="WebSocket requires Origin header or valid auth token"
+                )
 
-        ws_resp = web.WebSocketResponse()
+        ws_resp = web.WebSocketResponse(max_msg_size=1_048_576, heartbeat=30.0)
         await ws_resp.prepare(request)
-        self._ws_clients.append(ws_resp)
+        self._ws_clients.add(ws_resp)
         try:
             async for _msg in ws_resp:
                 pass  # Client messages are ignored
         finally:
-            self._ws_clients.remove(ws_resp)
+            self._ws_clients.discard(ws_resp)
         return ws_resp
 
     # ------------------------------------------------------------------
@@ -202,8 +234,6 @@ class _ViewerServer:
     def notify_change(self, event: dict[str, Any]) -> None:
         """Record an event for broadcast. Safe to call from any thread."""
         with self._event_lock:
-            if len(self._event_log) >= _MAX_EVENT_LOG:
-                self._event_log = self._event_log[-(_MAX_EVENT_LOG // 2) :]
             self._event_log.append(event)
 
     async def _broadcast_loop(self) -> None:
@@ -218,14 +248,13 @@ class _ViewerServer:
             for event in events:
                 payload = json.dumps(event)
                 closed: list[web.WebSocketResponse] = []
-                for ws_client in self._ws_clients:
+                for ws_client in list(self._ws_clients):
                     try:
                         await ws_client.send_str(payload)
                     except Exception:
                         closed.append(ws_client)
                 for c in closed:
-                    if c in self._ws_clients:
-                        self._ws_clients.remove(c)
+                    self._ws_clients.discard(c)
 
     # ------------------------------------------------------------------
     # Server lifecycle
@@ -265,6 +294,8 @@ def start_viewer(
     open_browser: bool = True,
 ) -> str:
     """Start the viewer server (idempotent). Returns the URL."""
+    if not (1024 <= port <= 65535):
+        raise ValueError("Port must be between 1024 and 65535")
     global _server
     with _lock:
         if _server is None:

@@ -378,6 +378,8 @@ def export_kicad(circuit_id: str, filename: str | None = None) -> dict:
 @mcp.tool()
 def open_viewer(circuit_id: str | None = None, port: int = 8080) -> dict:
     """Start the interactive web schematic viewer and return its URL."""
+    if not (1024 <= port <= 65535):
+        return {"error": "Port must be between 1024 and 65535"}
     try:
         url = start_viewer(_manager, port=port)
     except Exception as e:

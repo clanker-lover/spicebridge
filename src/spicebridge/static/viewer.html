@@ -125,7 +125,7 @@ header h1 { font-size: 16px; font-weight: 600; color: #4fc3f7; }
     let pollTimer = null;
 
     // --- API helpers ---
-    const authToken = window.__SPICEBRIDGE_TOKEN || '';
+    const authToken = document.querySelector('meta[name="spicebridge-token"]')?.content || '';
 
     async function apiFetch(path) {
         const headers = {};
