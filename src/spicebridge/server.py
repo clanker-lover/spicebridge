@@ -15,6 +15,7 @@ from spicebridge.parser import (
 from spicebridge.schematic import draw_schematic as _draw_schematic
 from spicebridge.simulator import run_simulation, validate_netlist_syntax
 from spicebridge.solver import solve as _solve_components
+from spicebridge.standard_values import format_engineering, snap_to_standard
 from spicebridge.template_manager import (
     TemplateManager,
     modify_component_in_netlist,
@@ -177,20 +178,62 @@ def list_templates(category: str | None = None) -> dict:
 
 
 @mcp.tool()
-def load_template(template_id: str, params: dict | None = None) -> dict:
-    """Load a circuit template and create a circuit from it."""
+def load_template(
+    template_id: str,
+    params: dict | None = None,
+    specs: dict | None = None,
+) -> dict:
+    """Load a circuit template and create a circuit from it.
+
+    If *specs* is provided, the design-equation solver runs automatically,
+    results are snapped to E24 standard values, and the netlist `.param`
+    lines are updated.  Explicit *params* override solver-calculated values.
+    """
     try:
         t = _templates.get_template(template_id)
     except KeyError as e:
         return {"status": "error", "error": str(e)}
 
     netlist = t.netlist
+    calculated_values: dict[str, str] | None = None
+    solver_notes: list[str] | None = None
+
+    if specs is not None:
+        try:
+            solver_result = _solve_components(template_id, specs)
+        except ValueError as exc:
+            if "Unknown topology" in str(exc):
+                # Template exists but has no solver — fall back to defaults
+                solver_notes = [
+                    f"No solver for '{template_id}'; using template defaults."
+                ]
+            else:
+                return {"status": "error", "error": str(exc)}
+        else:
+            solver_params: dict[str, str] = {}
+            for name, raw_val in solver_result["components"].items():
+                if raw_val in ("open", "0"):
+                    solver_params[name] = raw_val
+                else:
+                    numeric = _parse_spice_value(str(raw_val))
+                    snapped = snap_to_standard(numeric, "E24")
+                    solver_params[name] = format_engineering(snapped)
+            calculated_values = dict(solver_params)
+            solver_notes = solver_result.get("notes", [])
+
+            # Explicit params override solver values
+            if params:
+                solver_params.update(params)
+
+            netlist = substitute_params(netlist, solver_params)
+            params = None  # already applied
+
     if params:
         netlist = substitute_params(netlist, params)
 
     circuit_id = _manager.create(netlist)
     preview_lines = netlist.strip().splitlines()[:5]
-    return {
+    result = {
         "status": "ok",
         "circuit_id": circuit_id,
         "preview": preview_lines,
@@ -198,6 +241,11 @@ def load_template(template_id: str, params: dict | None = None) -> dict:
         "components": t.components,
         "design_equations": t.design_equations,
     }
+    if calculated_values is not None:
+        result["calculated_values"] = calculated_values
+    if solver_notes is not None:
+        result["solver_notes"] = solver_notes
+    return result
 
 
 @mcp.tool()
