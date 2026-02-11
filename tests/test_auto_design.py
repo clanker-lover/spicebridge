@@ -1,0 +1,103 @@
+"""Integration tests for the auto_design MCP tool."""
+
+from spicebridge.server import auto_design
+
+
+def test_auto_design_rc_lowpass_ac():
+    """Happy path: 1kHz RC lowpass, all_specs_passed=True, f_3dB within 10%."""
+    result = auto_design(
+        template_id="rc_lowpass_1st",
+        specs={"f_3dB_hz": {"target": 1000, "tolerance_pct": 10}},
+        sim_type="ac",
+    )
+    assert result["status"] == "ok"
+    assert result["all_specs_passed"] is True
+    assert result["circuit_id"]
+    # Verify the measured f_3dB is within 10% of 1000 Hz
+    actual = result["comparison"]["results"]["f_3dB_hz"]["actual"]
+    assert abs(actual - 1000) / 1000 < 0.10
+
+
+def test_auto_design_multiple_specs():
+    """Multiple AC specs (f_3dB + gain_dc_dB) in one call."""
+    result = auto_design(
+        template_id="rc_lowpass_1st",
+        specs={
+            "f_3dB_hz": {"target": 1000, "tolerance_pct": 10},
+            "gain_dc_dB": {"target": 0, "tolerance_pct": 5},
+        },
+        sim_type="ac",
+    )
+    assert result["status"] == "ok"
+    assert "f_3dB_hz" in result["comparison"]["results"]
+    assert "gain_dc_dB" in result["comparison"]["results"]
+
+
+def test_auto_design_custom_sim_params():
+    """sim_params override defaults."""
+    result = auto_design(
+        template_id="rc_lowpass_1st",
+        specs={"f_3dB_hz": {"target": 1000, "tolerance_pct": 10}},
+        sim_type="ac",
+        sim_params={"start_freq": 10, "stop_freq": 100000, "points_per_decade": 50},
+    )
+    assert result["status"] == "ok"
+    assert result["circuit_id"]
+
+
+def test_auto_design_voltage_divider_dc():
+    """DC path: voltage divider, v(out) target."""
+    result = auto_design(
+        template_id="voltage_divider",
+        specs={"v(out)": {"target": 5.0, "tolerance_pct": 5}},
+        sim_type="dc",
+    )
+    assert result["status"] == "ok"
+    assert result["all_specs_passed"] is True
+    actual = result["comparison"]["results"]["v(out)"]["actual"]
+    assert abs(actual - 5.0) / 5.0 < 0.05
+
+
+def test_auto_design_bad_template_id():
+    """Error at load_template, failed_step='load_template'."""
+    result = auto_design(
+        template_id="nonexistent_template",
+        specs={"f_3dB_hz": {"target": 1000, "tolerance_pct": 5}},
+    )
+    assert result["status"] == "error"
+    assert result["failed_step"] == "load_template"
+
+
+def test_auto_design_invalid_sim_type():
+    """Error at simulation, partial results include circuit_id."""
+    result = auto_design(
+        template_id="rc_lowpass_1st",
+        specs={"f_3dB_hz": {"target": 1000, "tolerance_pct": 10}},
+        sim_type="unknown_type",
+    )
+    assert result["status"] == "error"
+    assert result["failed_step"] == "simulation"
+    assert result["circuit_id"]  # partial results present
+
+
+def test_auto_design_spec_fails():
+    """status='ok' but all_specs_passed=False (impossible spec)."""
+    result = auto_design(
+        template_id="rc_lowpass_1st",
+        specs={"f_3dB_hz": {"target": 999999, "tolerance_pct": 0.001}},
+        sim_type="ac",
+    )
+    assert result["status"] == "ok"
+    assert result["all_specs_passed"] is False
+
+
+def test_auto_design_returns_netlist_preview():
+    """Result includes netlist_preview with content."""
+    result = auto_design(
+        template_id="rc_lowpass_1st",
+        specs={"f_3dB_hz": {"target": 1000, "tolerance_pct": 10}},
+        sim_type="ac",
+    )
+    assert result["status"] == "ok"
+    assert "netlist_preview" in result
+    assert len(result["netlist_preview"]) > 0

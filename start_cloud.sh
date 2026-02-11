@@ -2,18 +2,20 @@
 # Start SPICEBridge MCP server with a Cloudflare quick tunnel for cloud access.
 #
 # Usage:
-#   ./scripts/start_cloud.sh              # default port 8000
-#   PORT=9000 ./scripts/start_cloud.sh    # custom port
+#   ./start_cloud.sh              # default port 8000
+#   PORT=9000 ./start_cloud.sh    # custom port
+#
+# For a permanent URL, use: cloudflared tunnel create <name>
 set -euo pipefail
 
 PORT="${PORT:-8000}"
 HOST="${HOST:-127.0.0.1}"
-TRANSPORT="${TRANSPORT:-sse}"
+TRANSPORT="${TRANSPORT:-streamable-http}"
 
 # --- Preflight checks ---
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+PROJECT_DIR="$SCRIPT_DIR"
 VENV_PYTHON="$PROJECT_DIR/.venv/bin/python"
 
 if [ ! -x "$VENV_PYTHON" ]; then
@@ -58,7 +60,7 @@ SERVER_PID=$!
 # Wait for server to be ready
 echo "Waiting for server..."
 for i in $(seq 1 30); do
-    if curl -sf "http://$HOST:$PORT/sse" -o /dev/null --max-time 1 2>/dev/null; then
+    if curl -sf "http://$HOST:$PORT/mcp" -o /dev/null --max-time 1 2>/dev/null; then
         echo "Server ready."
         break
     fi
@@ -90,7 +92,7 @@ echo ""
 echo "  {"
 echo "    \"mcpServers\": {"
 echo "      \"spicebridge\": {"
-echo "        \"url\": \"https://<YOUR-TUNNEL-URL>/sse\""
+echo "        \"url\": \"https://<YOUR-TUNNEL-URL>/mcp\""
 echo "      }"
 echo "    }"
 echo "  }"

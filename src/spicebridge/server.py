@@ -628,6 +628,151 @@ def calculate_components(topology_id: str, specs: dict) -> dict:
     return {"status": "ok", **result}
 
 
+# ---------------------------------------------------------------------------
+# auto_design — single-call design loop
+# ---------------------------------------------------------------------------
+
+# Maps compare_specs keys → solver parameter names
+_SPEC_TO_SOLVER: dict[str, str] = {
+    "f_3dB_hz": "f_cutoff_hz",
+    "f_cutoff_hz": "f_cutoff_hz",
+    "f_center_hz": "f_center_hz",
+    "f_notch_hz": "f_notch_hz",
+}
+
+# Sensible defaults per simulation type
+_DEFAULT_SIM_PARAMS: dict[str, dict] = {
+    "ac": {"start_freq": 1, "stop_freq": 1e6, "points_per_decade": 20},
+    "transient": {"stop_time": 10e-3, "step_time": 10e-6},
+    "dc": {},
+}
+
+
+def _specs_to_solver_params(specs: dict) -> dict:
+    """Extract target values from compare_specs format and map to solver keys.
+
+    Input:  {"f_3dB_hz": {"target": 1000, "tolerance_pct": 5}}
+    Output: {"f_cutoff_hz": 1000}
+    """
+    solver_params: dict = {}
+    for spec_key, spec_def in specs.items():
+        if spec_key in _SPEC_TO_SOLVER:
+            target = spec_def.get("target") if isinstance(spec_def, dict) else spec_def
+            if target is not None:
+                solver_params[_SPEC_TO_SOLVER[spec_key]] = target
+    return solver_params
+
+
+def _run_sim(circuit_id: str, sim_type: str, sim_params: dict | None) -> dict:
+    """Merge user sim_params with defaults and dispatch to the right analysis."""
+    defaults = _DEFAULT_SIM_PARAMS.get(sim_type, {})
+    merged = {**defaults, **(sim_params or {})}
+
+    if sim_type == "ac":
+        return run_ac_analysis(circuit_id, **merged)
+    elif sim_type == "transient":
+        return run_transient(circuit_id, **merged)
+    elif sim_type == "dc":
+        return run_dc_op(circuit_id)
+    else:
+        return {"status": "error", "error": f"Unknown sim_type '{sim_type}'"}
+
+
+def _collect_measurements(circuit_id: str, sim_type: str, specs: dict) -> dict:
+    """Run relevant measure_* tools and collect results. Failures are silenced."""
+    import contextlib
+
+    measurements: dict = {}
+
+    with contextlib.suppress(Exception):
+        if sim_type == "ac":
+            measurements["bandwidth"] = measure_bandwidth(circuit_id)
+        elif sim_type == "transient":
+            measurements["transient"] = measure_transient(circuit_id)
+        elif sim_type == "dc":
+            for spec_key in specs:
+                # Node-voltage specs like "v(out)"
+                if spec_key not in _SPEC_MAP:
+                    with contextlib.suppress(Exception):
+                        measurements[spec_key] = measure_dc(circuit_id, spec_key)
+            with contextlib.suppress(Exception):
+                measurements["power"] = measure_power(circuit_id)
+
+    return measurements
+
+
+@mcp.tool()
+def auto_design(
+    template_id: str,
+    specs: dict,
+    sim_type: str = "ac",
+    sim_params: dict | None = None,
+) -> dict:
+    """Run the full design loop in one call: load template, simulate, and verify.
+
+    *specs* uses compare_specs format:
+        {"f_3dB_hz": {"target": 1000, "tolerance_pct": 5}}
+
+    *sim_type* is one of "ac", "transient", or "dc".
+    *sim_params* optionally overrides default simulation parameters.
+
+    Returns accumulated results including circuit_id, simulation data,
+    measurements, and spec comparison.  On failure at any step, returns
+    partial results with an ``error`` key and ``failed_step``.
+    """
+    result: dict = {}
+
+    # 1. Translate specs to solver format
+    solver_specs = _specs_to_solver_params(specs)
+
+    # 2. Load template (with solver specs if any mapped)
+    load_args: dict = {"template_id": template_id}
+    if solver_specs:
+        load_args["specs"] = solver_specs
+    loaded = load_template(**load_args)
+    if loaded.get("status") != "ok":
+        return {**result, **loaded, "failed_step": "load_template"}
+    result["circuit_id"] = loaded["circuit_id"]
+    result["netlist_preview"] = loaded.get("preview", [])
+    result["calculated_values"] = loaded.get("calculated_values")
+    result["solver_notes"] = loaded.get("solver_notes")
+
+    circuit_id = loaded["circuit_id"]
+
+    # 3. Validate netlist
+    validation = validate_netlist(circuit_id)
+    if validation.get("status") != "ok" or not validation.get("valid", False):
+        return {
+            **result,
+            "validation": validation,
+            "failed_step": "validate_netlist",
+            "status": "error",
+            "error": "Netlist validation failed",
+        }
+
+    # 4. Simulate
+    sim_result = _run_sim(circuit_id, sim_type, sim_params)
+    result["simulation"] = sim_result
+    if sim_result.get("status") != "ok":
+        return {
+            **result,
+            "failed_step": "simulation",
+            "status": "error",
+            "error": sim_result.get("error", "Simulation failed"),
+        }
+
+    # 5. Collect measurements
+    result["measurements"] = _collect_measurements(circuit_id, sim_type, specs)
+
+    # 6. Compare specs
+    comparison = compare_specs(circuit_id, specs)
+    result["comparison"] = comparison
+    result["all_specs_passed"] = comparison.get("all_passed", False)
+    result["status"] = "ok"
+
+    return result
+
+
 def configure_for_remote() -> None:
     """Disable DNS rebinding protection for tunnel/remote access."""
     from mcp.server.transport_security import TransportSecuritySettings
