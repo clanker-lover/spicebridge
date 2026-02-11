@@ -1,6 +1,6 @@
 """SPICEBridge — AI-powered circuit design through simulation."""
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 _LAZY_IMPORTS = {
     "run_simulation": "spicebridge.simulator",
