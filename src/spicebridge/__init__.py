@@ -2,6 +2,7 @@
 
 __version__ = "0.1.0"
 
+from spicebridge.kicad_export import export_kicad_schematic
 from spicebridge.model_generator import GeneratedModel, generate_model
 from spicebridge.model_store import ModelStore
 from spicebridge.parser import parse_results, read_ac_at_frequency, read_ac_bandwidth
@@ -16,6 +17,7 @@ __all__ = [
     "read_ac_bandwidth",
     "parse_netlist",
     "draw_schematic",
+    "export_kicad_schematic",
     "TemplateManager",
     "generate_model",
     "GeneratedModel",

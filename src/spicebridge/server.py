@@ -7,6 +7,7 @@ import re
 from mcp.server.fastmcp import FastMCP
 
 from spicebridge.circuit_manager import CircuitManager
+from spicebridge.kicad_export import export_kicad_schematic as _export_kicad
 from spicebridge.model_generator import generate_model
 from spicebridge.model_store import ModelStore
 from spicebridge.monte_carlo import (
@@ -27,6 +28,7 @@ from spicebridge.parser import (
     read_ac_bandwidth,
 )
 from spicebridge.schematic import draw_schematic as _draw_schematic
+from spicebridge.schematic import parse_netlist
 from spicebridge.simulator import run_simulation, validate_netlist_syntax
 from spicebridge.solver import solve as _solve_components
 from spicebridge.standard_values import (
@@ -205,6 +207,31 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> dict:
         output_file = circuit.output_dir / f"schematic.{fmt}"
         _draw_schematic(circuit.netlist, output_file, fmt=fmt)
         return {"status": "ok", "filepath": str(output_file), "format": fmt}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@mcp.tool()
+def export_kicad(circuit_id: str, filename: str | None = None) -> dict:
+    """Export circuit as KiCad 8 schematic (.kicad_sch) file."""
+    try:
+        circuit = _manager.get(circuit_id)
+    except KeyError as e:
+        return {"status": "error", "error": str(e)}
+    try:
+        fname = filename or f"{circuit_id}.kicad_sch"
+        output_path, warnings = _export_kicad(
+            circuit.netlist,
+            output_dir=circuit.output_dir,
+            filename=fname,
+        )
+        comps = parse_netlist(circuit.netlist)
+        return {
+            "status": "ok",
+            "file_path": str(output_path),
+            "num_components": len(comps),
+            "warnings": warnings,
+        }
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
