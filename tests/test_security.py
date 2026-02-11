@@ -286,22 +286,22 @@ class TestPathTraversal:
 class TestResourceLimits:
     """Verify resource bounds are enforced on MCP tools."""
 
-    @pytest.mark.parametrize("num_runs", [0, -1, 1001, 10_000])
+    @pytest.mark.parametrize("num_runs", [0, -1, 101, 10_000])
     def test_monte_carlo_rejects_out_of_range(self, num_runs):
         setup = create_circuit(_CLEAN_NETLIST)
         cid = setup["circuit_id"]
         result = run_monte_carlo(cid, analysis_type="ac", num_runs=num_runs)
         assert result["status"] == "error"
-        assert "between 1 and 1000" in result["error"]
+        assert "num_runs" in result["error"]
 
-    @pytest.mark.parametrize("num_runs", [1, 1000])
+    @pytest.mark.parametrize("num_runs", [1, 100])
     def test_monte_carlo_accepts_boundary_values(self, num_runs):
         setup = create_circuit(_CLEAN_NETLIST)
         cid = setup["circuit_id"]
         result = run_monte_carlo(cid, analysis_type="ac", num_runs=num_runs)
         # May fail for other reasons (no ngspice), but not for bounds
         if result["status"] == "error":
-            assert "between 1 and 1000" not in result["error"]
+            assert "num_runs" not in result["error"]
 
     def test_simulation_timeout_handled(self):
         with (

@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import shutil
 import subprocess  # nosec B404 — used with list args, no shell=True
 import tempfile
+import threading
 from pathlib import Path
 
 _ngspice_available: bool | None = None
+
+_SIMULATION_TIMEOUT = 60
+_MAX_CONCURRENT_SIMS = 4
+_sim_semaphore = threading.Semaphore(_MAX_CONCURRENT_SIMS)
 
 
 def _check_ngspice() -> bool:
@@ -23,8 +29,12 @@ def _run_via_spicelib(netlist_file: Path, raw_file: Path) -> bool:
     try:
         from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
-        NGspiceSimulator.run(str(netlist_file))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(NGspiceSimulator.run, str(netlist_file))
+            future.result(timeout=_SIMULATION_TIMEOUT)
         return raw_file.exists() and raw_file.stat().st_size > 0
+    except concurrent.futures.TimeoutError:
+        return False
     except Exception:
         return False
 
@@ -35,13 +45,25 @@ def _run_via_subprocess(netlist_file: Path, raw_file: Path) -> bool:
         result = subprocess.run(  # nosec B603 B607 — list args, no shell, trusted binary
             ["ngspice", "-b", "-r", str(raw_file), str(netlist_file)],
             capture_output=True,
-            timeout=60,
+            timeout=_SIMULATION_TIMEOUT,
         )
         if result.returncode != 0:
             return False
         return raw_file.exists() and raw_file.stat().st_size > 0
     except Exception:
         return False
+
+
+def _do_simulation(netlist: str, output_dir: Path) -> bool:
+    """Write netlist to output_dir and run simulation. Returns True on success."""
+    netlist_file = output_dir / "circuit.net"
+    raw_file = output_dir / "circuit.raw"
+    netlist_file.write_text(netlist)
+
+    # Try spicelib first, fall back to direct subprocess
+    if _run_via_spicelib(netlist_file, raw_file):
+        return True
+    return _run_via_subprocess(netlist_file, raw_file)
 
 
 def run_simulation(netlist: str, output_dir: str | Path | None = None) -> bool:
@@ -70,20 +92,17 @@ def run_simulation(netlist: str, output_dir: str | Path | None = None) -> bool:
             "Install it with: sudo apt install ngspice"
         )
 
-    if output_dir is None:
-        output_dir = Path(tempfile.mkdtemp(prefix="spicebridge_"))
-    else:
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-    netlist_file = output_dir / "circuit.net"
-    raw_file = output_dir / "circuit.raw"
-    netlist_file.write_text(netlist)
-
-    # Try spicelib first, fall back to direct subprocess
-    if _run_via_spicelib(netlist_file, raw_file):
-        return True
-    return _run_via_subprocess(netlist_file, raw_file)
+    _sim_semaphore.acquire()
+    try:
+        if output_dir is None:
+            with tempfile.TemporaryDirectory(prefix="spicebridge_") as tmpdir:
+                return _do_simulation(netlist, Path(tmpdir))
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            return _do_simulation(netlist, output_dir)
+    finally:
+        _sim_semaphore.release()
 
 
 def validate_netlist_syntax(netlist: str) -> tuple[bool, list[str]]:
@@ -102,24 +121,25 @@ def validate_netlist_syntax(netlist: str) -> tuple[bool, list[str]]:
             "Install it with: sudo apt install ngspice"
         )
 
-    tmp = Path(tempfile.mkdtemp(prefix="spicebridge_validate_"))
-    netlist_file = tmp / "check.net"
-    netlist_file.write_text(netlist)
+    with tempfile.TemporaryDirectory(prefix="spicebridge_validate_") as tmpdir:
+        tmp = Path(tmpdir)
+        netlist_file = tmp / "check.net"
+        netlist_file.write_text(netlist)
 
-    try:
-        result = subprocess.run(  # nosec B603 B607 — list args, no shell, trusted binary
-            ["ngspice", "-b", str(netlist_file)],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except subprocess.TimeoutExpired:
-        return False, ["ngspice timed out"]
+        try:
+            result = subprocess.run(  # nosec B603 B607 — list args, no shell, trusted binary
+                ["ngspice", "-b", str(netlist_file)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            return False, ["ngspice timed out"]
 
-    errors: list[str] = []
-    for line in (result.stdout + "\n" + result.stderr).splitlines():
-        lower = line.lower()
-        if "error" in lower or "fatal" in lower:
-            errors.append(line.strip())
+        errors: list[str] = []
+        for line in (result.stdout + "\n" + result.stderr).splitlines():
+            lower = line.lower()
+            if "error" in lower or "fatal" in lower:
+                errors.append(line.strip())
 
-    return (len(errors) == 0, errors)
+        return (len(errors) == 0, errors)

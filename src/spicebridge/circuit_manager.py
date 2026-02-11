@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import atexit
+import logging
+import shutil
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+_MAX_CIRCUITS = 100
 
 
 @dataclass
@@ -17,6 +25,7 @@ class CircuitState:
     output_dir: Path
     last_results: dict | None = field(default=None)
     ports: dict[str, str] | None = field(default=None)
+    created_at: float = field(default_factory=time.monotonic)
 
 
 class CircuitManager:
@@ -24,9 +33,19 @@ class CircuitManager:
 
     def __init__(self) -> None:
         self._circuits: dict[str, CircuitState] = {}
+        atexit.register(self.cleanup_all)
 
     def create(self, netlist: str) -> str:
         """Create a new circuit and return its ID."""
+        if len(self._circuits) >= _MAX_CIRCUITS:
+            oldest_id = next(iter(self._circuits))
+            logger.warning(
+                "Circuit limit reached (%d); evicting circuit '%s'",
+                _MAX_CIRCUITS,
+                oldest_id,
+            )
+            self.delete(oldest_id)
+
         circuit_id = uuid.uuid4().hex[:8]
         output_dir = Path(tempfile.mkdtemp(prefix=f"spicebridge_{circuit_id}_"))
         self._circuits[circuit_id] = CircuitState(
@@ -67,3 +86,16 @@ class CircuitManager:
             }
             for cid, state in self._circuits.items()
         ]
+
+    def delete(self, circuit_id: str) -> None:
+        """Remove a circuit and clean up its output directory."""
+        state = self._circuits.pop(circuit_id, None)
+        if state is None:
+            raise KeyError(f"Circuit '{circuit_id}' not found")
+        shutil.rmtree(state.output_dir, ignore_errors=True)
+
+    def cleanup_all(self) -> None:
+        """Remove all circuits and clean up all output directories."""
+        for state in self._circuits.values():
+            shutil.rmtree(state.output_dir, ignore_errors=True)
+        self._circuits.clear()

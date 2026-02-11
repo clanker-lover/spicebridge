@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 from mcp.server.fastmcp import FastMCP
 
@@ -68,6 +69,14 @@ _END_RE = re.compile(r"^\s*\.end\s*$", re.IGNORECASE)
 _PORT_NAME_RE = re.compile(r"^[A-Za-z0-9_.$#-]+$")
 _STAGE_LABEL_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
+# --- Resource limits ---
+_MAX_NETLIST_SIZE = 100_000  # 100 KB
+_MAX_STAGES = 20
+_MAX_MONTE_CARLO_RUNS = 100
+_MONTE_CARLO_TIMEOUT = 30 * 60  # 30 minutes
+_MAX_WORST_CASE_COMPONENTS = 20
+_MAX_WORST_CASE_SIMS = 500
+
 
 def _prepare_netlist(netlist: str, analysis_line: str) -> str:
     """Strip existing analysis/.end commands and append new ones."""
@@ -100,6 +109,14 @@ def _resolve_model_includes(model_names: list[str]) -> str:
 @mcp.tool()
 def create_circuit(netlist: str, models: list[str] | None = None) -> dict:
     """Store a SPICE netlist and return a circuit ID for subsequent analyses."""
+    if len(netlist) > _MAX_NETLIST_SIZE:
+        return {
+            "status": "error",
+            "error": (
+                f"Netlist too large ({len(netlist)} bytes); "
+                f"limit is {_MAX_NETLIST_SIZE}"
+            ),
+        }
     try:
         sanitize_netlist(netlist)
     except ValueError as e:
@@ -154,6 +171,16 @@ def run_ac_analysis(
     except (ValueError, TypeError) as exc:
         return {"status": "error", "error": f"Invalid analysis parameter: {exc}"}
 
+    if not 1 <= points_per_decade <= 1000:
+        return {
+            "status": "error",
+            "error": "points_per_decade must be between 1 and 1000",
+        }
+    if start_freq <= 0:
+        return {"status": "error", "error": "start_freq must be > 0"}
+    if stop_freq <= start_freq:
+        return {"status": "error", "error": "stop_freq must be > start_freq"}
+
     analysis_line = f".ac dec {points_per_decade} {start_freq} {stop_freq}"
     prepared = _prepare_netlist(circuit.netlist, analysis_line)
 
@@ -192,6 +219,16 @@ def run_transient(
             startup_time = float(startup_time)
     except (ValueError, TypeError) as exc:
         return {"status": "error", "error": f"Invalid analysis parameter: {exc}"}
+
+    if step_time <= 0:
+        return {"status": "error", "error": "step_time must be > 0"}
+    if stop_time <= 0:
+        return {"status": "error", "error": "stop_time must be > 0"}
+    if stop_time / step_time > 1_000_000:
+        return {
+            "status": "error",
+            "error": "stop_time/step_time exceeds 1,000,000 steps",
+        }
 
     if startup_time is not None:
         analysis_line = f".tran {step_time} {stop_time} {startup_time}"
@@ -240,18 +277,48 @@ def run_dc_op(circuit_id: str) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def _summarize_results(data: object) -> object:
+    """Recursively cap large lists in results to first/last 5 elements."""
+    if isinstance(data, list):
+        if len(data) > 50:
+            return {
+                "type": "array",
+                "length": len(data),
+                "first_5": [_summarize_results(x) for x in data[:5]],
+                "last_5": [_summarize_results(x) for x in data[-5:]],
+            }
+        return [_summarize_results(x) for x in data]
+    if isinstance(data, dict):
+        return {k: _summarize_results(v) for k, v in data.items()}
+    return data
+
+
 @mcp.tool()
-def get_results(circuit_id: str) -> dict:
+def get_results(circuit_id: str, summary: bool = True) -> dict:
     """Return the last simulation results for a circuit."""
     try:
         circuit = _manager.get(circuit_id)
     except KeyError as e:
         return {"status": "error", "error": str(e)}
 
+    results = circuit.last_results
+    if summary and results is not None:
+        results = _summarize_results(results)
+
     return {
         "status": "ok",
-        "results": circuit.last_results,
+        "results": results,
     }
+
+
+@mcp.tool()
+def delete_circuit(circuit_id: str) -> dict:
+    """Delete a stored circuit and clean up its output directory."""
+    try:
+        _manager.delete(circuit_id)
+    except KeyError:
+        return {"status": "error", "error": f"Circuit '{circuit_id}' not found"}
+    return {"status": "ok"}
 
 
 @mcp.tool()
@@ -368,6 +435,11 @@ def connect_stages(
     (out of stage N → in of stage N+1).
     *shared_ports* defaults to ``["gnd"]`` — those nodes are never prefixed.
     """
+    if len(stages) > _MAX_STAGES:
+        return {
+            "status": "error",
+            "error": f"Too many stages ({len(stages)}); limit is {_MAX_STAGES}",
+        }
     resolved: list[dict] = []
     for i, s in enumerate(stages):
         cid = s.get("circuit_id")
@@ -1125,6 +1197,7 @@ def _run_corner_analysis(
     default_tol: float,
     analysis_cmd: str,
     sensitivity: dict,
+    max_sims: int = _MAX_WORST_CASE_SIMS,
 ) -> tuple[list[tuple[tuple[int, ...], dict]], int, str]:
     """Run exhaustive or sensitivity-guided corners.
 
@@ -1134,10 +1207,12 @@ def _run_corner_analysis(
     corner_results: list[tuple[tuple[int, ...], dict]] = []
     num_runs = 0
 
-    if n <= 8:
+    if n <= 8 and 2**n <= max_sims:
         strategy = "exhaustive"
         corners = generate_corners(n)
         for corner in corners:
+            if num_runs >= max_sims:
+                break
             values = apply_corner(components, tolerances, default_tol, corner)
             modified = substitute_values(netlist, components, values)
             result = run_single_sim(modified, analysis_cmd)
@@ -1164,11 +1239,13 @@ def _run_corner_analysis(
         predicted_corners.add(tuple(1 for _ in range(n)))
         predicted_corners.add(tuple(-1 for _ in range(n)))
 
-        max_predicted = 100
+        max_predicted = min(100, max_sims)
         if len(predicted_corners) > max_predicted:
             predicted_corners = set(list(predicted_corners)[:max_predicted])
 
         for corner in predicted_corners:
+            if num_runs >= max_sims:
+                break
             values = apply_corner(components, tolerances, default_tol, corner)
             modified = substitute_values(netlist, components, values)
             result = run_single_sim(modified, analysis_cmd)
@@ -1246,8 +1323,11 @@ def run_monte_carlo(
     except KeyError as e:
         return {"status": "error", "error": str(e)}
 
-    if not 1 <= num_runs <= 1000:
-        return {"status": "error", "error": "num_runs must be between 1 and 1000"}
+    if not 1 <= num_runs <= _MAX_MONTE_CARLO_RUNS:
+        return {
+            "status": "error",
+            "error": f"num_runs must be between 1 and {_MAX_MONTE_CARLO_RUNS}",
+        }
 
     components = parse_component_values(circuit.netlist)
     if not components:
@@ -1275,8 +1355,13 @@ def run_monte_carlo(
     rng = _random.Random(seed)
     all_results: list[dict] = []
     failures: list[dict] = []
+    timed_out = False
+    deadline = time.monotonic() + _MONTE_CARLO_TIMEOUT
 
     for i in range(num_runs):
+        if time.monotonic() > deadline:
+            timed_out = True
+            break
         values = randomize_values(components, tolerances, default_tolerance_pct, rng)
         modified_netlist = substitute_values(circuit.netlist, components, values)
         result = run_single_sim(modified_netlist, analysis_cmd)
@@ -1287,9 +1372,10 @@ def run_monte_carlo(
 
     statistics = compute_statistics(all_results)
 
-    return {
+    response: dict = {
         "status": "ok",
         "num_runs": num_runs,
+        "num_completed": len(all_results) + len(failures),
         "num_successful": len(all_results),
         "num_failed": len(failures),
         "analysis_type": analysis_type,
@@ -1297,6 +1383,12 @@ def run_monte_carlo(
         "statistics": statistics,
         "failures": failures,
     }
+    if timed_out:
+        response["warning"] = (
+            f"Monte Carlo timed out after {_MONTE_CARLO_TIMEOUT}s; "
+            f"completed {len(all_results) + len(failures)} of {num_runs} runs"
+        )
+    return response
 
 
 @mcp.tool()
@@ -1329,6 +1421,15 @@ def run_worst_case(
         return {
             "status": "error",
             "error": "No R/C/L components found in netlist",
+        }
+
+    if len(components) > _MAX_WORST_CASE_COMPONENTS:
+        return {
+            "status": "error",
+            "error": (
+                f"Too many components ({len(components)}) for worst-case analysis; "
+                f"limit is {_MAX_WORST_CASE_COMPONENTS}"
+            ),
         }
 
     analysis_params = _build_analysis_params(
@@ -1364,7 +1465,8 @@ def run_worst_case(
         nominal, components, sensitivity_runs, tolerances, default_tolerance_pct
     )
 
-    # 3. Corner analysis
+    # 3. Corner analysis (remaining budget)
+    remaining_budget = max(0, _MAX_WORST_CASE_SIMS - num_runs)
     corner_results, corner_runs, strategy = _run_corner_analysis(
         circuit.netlist,
         components,
@@ -1372,6 +1474,7 @@ def run_worst_case(
         default_tolerance_pct,
         analysis_cmd,
         sensitivity,
+        max_sims=remaining_budget,
     )
     num_runs += corner_runs
 
