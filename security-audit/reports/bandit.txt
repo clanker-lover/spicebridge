@@ -1,0 +1,151 @@
+Run started:2026-02-11 08:55:59.949559+00:00
+
+Test results:
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: src/spicebridge/server.py:99:4
+98	            _manager.set_ports(circuit_id, detected)
+99	    except Exception:
+100	        pass  # non-fatal
+101	    viewer = get_viewer_server()
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b110_try_except_pass.html
+   Location: src/spicebridge/server.py:448:8
+447	                _manager.set_ports(circuit_id, detected)
+448	        except Exception:
+449	            pass  # non-fatal
+450	    preview_lines = netlist.strip().splitlines()[:5]
+
+--------------------------------------------------
+>> Issue: [B311:blacklist] Standard pseudo-random generators are not suitable for security/cryptographic purposes.
+   Severity: Low   Confidence: High
+   CWE: CWE-330 (https://cwe.mitre.org/data/definitions/330.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_calls.html#b311-random
+   Location: src/spicebridge/server.py:1078:10
+1077	
+1078	    rng = _random.Random(seed)
+1079	    all_results: list[dict] = []
+
+--------------------------------------------------
+>> Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_imports.html#b404-import-subprocess
+   Location: src/spicebridge/simulator.py:6:0
+5	import shutil
+6	import subprocess
+7	import tempfile
+
+--------------------------------------------------
+>> Issue: [B607:start_process_with_partial_path] Starting a process with a partial executable path
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b607_start_process_with_partial_path.html
+   Location: src/spicebridge/simulator.py:35:17
+34	    try:
+35	        result = subprocess.run(
+36	            ["ngspice", "-b", "-r", str(raw_file), str(netlist_file)],
+37	            capture_output=True,
+38	            timeout=60,
+39	        )
+40	        if result.returncode != 0:
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: src/spicebridge/simulator.py:35:17
+34	    try:
+35	        result = subprocess.run(
+36	            ["ngspice", "-b", "-r", str(raw_file), str(netlist_file)],
+37	            capture_output=True,
+38	            timeout=60,
+39	        )
+40	        if result.returncode != 0:
+
+--------------------------------------------------
+>> Issue: [B607:start_process_with_partial_path] Starting a process with a partial executable path
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b607_start_process_with_partial_path.html
+   Location: src/spicebridge/simulator.py:110:17
+109	    try:
+110	        result = subprocess.run(
+111	            ["ngspice", "-b", str(netlist_file)],
+112	            capture_output=True,
+113	            text=True,
+114	            timeout=10,
+115	        )
+116	    except subprocess.TimeoutExpired:
+
+--------------------------------------------------
+>> Issue: [B603:subprocess_without_shell_equals_true] subprocess call - check for execution of untrusted input.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b603_subprocess_without_shell_equals_true.html
+   Location: src/spicebridge/simulator.py:110:17
+109	    try:
+110	        result = subprocess.run(
+111	            ["ngspice", "-b", str(netlist_file)],
+112	            capture_output=True,
+113	            text=True,
+114	            timeout=10,
+115	        )
+116	    except subprocess.TimeoutExpired:
+
+--------------------------------------------------
+>> Issue: [B405:blacklist] Using xml.etree.ElementTree to parse untrusted XML data is known to be vulnerable to XML attacks. Replace xml.etree.ElementTree with the equivalent defusedxml package, or make sure defusedxml.defuse_stdlib() is called.
+   Severity: Low   Confidence: High
+   CWE: CWE-20 (https://cwe.mitre.org/data/definitions/20.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/blacklists/blacklist_imports.html#b405-import-xml-etree
+   Location: src/spicebridge/svg_renderer.py:6:0
+5	import math
+6	import xml.etree.ElementTree as ET
+7	from collections import defaultdict
+
+--------------------------------------------------
+>> Issue: [B101:assert_used] Use of assert detected. The enclosed code will be removed when compiling to optimised byte code.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b101_assert_used.html
+   Location: src/spicebridge/template_manager.py:92:8
+91	        self._ensure_loaded()
+92	        assert self._templates is not None
+93	        result = []
+
+--------------------------------------------------
+>> Issue: [B101:assert_used] Use of assert detected. The enclosed code will be removed when compiling to optimised byte code.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.3/plugins/b101_assert_used.html
+   Location: src/spicebridge/template_manager.py:111:8
+110	        self._ensure_loaded()
+111	        assert self._templates is not None
+112	        if template_id not in self._templates:
+
+--------------------------------------------------
+
+Code scanned:
+	Total lines of code: 5602
+	Total lines skipped (#nosec): 0
+	Total potential issues skipped due to specifically being disabled (e.g., #nosec BXXX): 0
+
+Run metrics:
+	Total issues (by severity):
+		Undefined: 0
+		Low: 11
+		Medium: 0
+		High: 0
+	Total issues (by confidence):
+		Undefined: 0
+		Low: 0
+		Medium: 0
+		High: 11
+Files skipped (0):

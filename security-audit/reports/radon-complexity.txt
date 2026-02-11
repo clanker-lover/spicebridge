@@ -1,0 +1,22 @@
+src/spicebridge/kicad_export.py
+    F 724:0 export_kicad_schematic - C (14)
+    F 191:0 _route_wires - C (13)
+src/spicebridge/monte_carlo.py
+    F 335:0 compute_sensitivity - C (12)
+src/spicebridge/schematic.py
+    F 121:0 draw_schematic - D (25)
+    F 48:0 parse_netlist - C (15)
+src/spicebridge/svg_renderer.py
+    F 579:0 _build_svg - C (19)
+    F 502:0 _route_wires - C (13)
+src/spicebridge/composer.py
+    F 308:0 compose_stages - F (53)
+    F 120:0 prefix_netlist - E (37)
+    F 60:0 auto_detect_ports - C (18)
+src/spicebridge/prompt_translator.py
+    F 245:0 _extract_params - D (30)
+    F 579:0 _resolve_template - C (20)
+src/spicebridge/server.py
+    F 1106:0 run_worst_case - D (29)
+    F 378:0 load_template - C (17)
+    F 1014:0 run_monte_carlo - C (13)

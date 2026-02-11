@@ -1,0 +1,51 @@
+               
+               
+┌─────────────┐
+│ Scan Status │
+└─────────────┘
+  Scanning 32 files tracked by git with 1064 Code rules:
+                                                                                                                        
+  Language      Rules   Files          Origin      Rules                                                                
+ ─────────────────────────────        ───────────────────                                                               
+  <multilang>      61      32          Community    1064                                                                
+  python          243      20                                                                                           
+  json              4      11                                                                                           
+  html              1       1                                                                                           
+                                                                                                                        
+                
+                
+┌──────────────┐
+│ Scan Summary │
+└──────────────┘
+✅ Scan completed successfully.
+ • Findings: 2 (2 blocking)
+ • Rules run: 308
+ • Targets scanned: 32
+ • Parsed lines: ~100.0%
+ • Scan was limited to files tracked by git
+ • For a detailed list of skipped files and lines, run semgrep with the --verbose flag
+Ran 308 rules on 32 files: 2 findings.
+                   
+                   
+┌─────────────────┐
+│ 2 Code Findings │
+└─────────────────┘
+                                       
+    src/spicebridge/template_manager.py
+   ❯❯❱ python.lang.compatibility.python37.python37-compatibility-importlib2
+          Found 'importlib.resources', which is a module only available on Python 3.7+. This does not work in 
+          lower versions, and therefore is not backwards compatible. Use importlib_resources instead for older
+          Python versions.                                                                                    
+          Details: https://sg.run/eL3y                                                                        
+                                                                                                              
+            5┆ import importlib.resources
+                                 
+    src/spicebridge/web_viewer.py
+   ❯❯❱ python.lang.compatibility.python37.python37-compatibility-importlib2
+          Found 'importlib.resources', which is a module only available on Python 3.7+. This does not work in 
+          lower versions, and therefore is not backwards compatible. Use importlib_resources instead for older
+          Python versions.                                                                                    
+          Details: https://sg.run/eL3y                                                                        
+                                                                                                              
+           11┆ import importlib.resources
+

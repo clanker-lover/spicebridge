@@ -1,0 +1,97 @@
+
+
+[33m[1m+===========================================================================================================================================================================================+[0m
+
+
+[31m[1mDEPRECATED: [0m[33m[1mthis command (`check`) has been DEPRECATED, and will be unsupported beyond 01 June 2024.[0m
+
+
+[32mWe highly encourage switching to the new [0m[32m[1m`scan`[0m[32m command which is easier to use, more powerful, and can be set up to mimic the deprecated command if required.[0m
+
+
+[33m[1m+===========================================================================================================================================================================================+[0m
+
+
++==============================================================================+
+
+                               /$$$$$$            /$$
+                              /$$__  $$          | $$
+           /$$$$$$$  /$$$$$$ | $$  \__//$$$$$$  /$$$$$$   /$$   /$$
+          /$$_____/ |____  $$| $$$$   /$$__  $$|_  $$_/  | $$  | $$
+         |  $$$$$$   /$$$$$$$| $$_/  | $$$$$$$$  | $$    | $$  | $$
+          \____  $$ /$$__  $$| $$    | $$_____/  | $$ /$$| $$  | $$
+          /$$$$$$$/|  $$$$$$$| $$    |  $$$$$$$  |  $$$$/|  $$$$$$$
+         |_______/  \_______/|__/     \_______/   \___/   \____  $$
+                                                          /$$  | $$
+                                                         |  $$$$$$/
+  by safetycli.com                                        \______/
+
++==============================================================================+
+
+ [1mREPORT[0m 
+
+  Safety [1mv3.7.0[0m is scanning for [1mVulnerabilities[0m[1m...[0m
+[1m  Scanning dependencies[0m in your [1menvironment:[0m
+
+  -> /home/brandonwadelightner/spicebridge/src
+  -> /home/brandonwadelightner/spicebridge/.venv/lib/python3.12/site-packages
+
+  Using [1mopen-source vulnerability database[0m
+[1m  Found and scanned 109 packages[0m
+  Timestamp [1m2026-02-11 01:56:39[0m
+[1m  2[0m[1m vulnerabilities reported[0m
+[1m  0[0m[1m vulnerabilities ignored[0m
+
++==============================================================================+
+ [1mVULNERABILITIES REPORTED[0m 
++==============================================================================+
+
+[31m-> Vulnerability found in pip version 24.0[0m
+[1m   Vulnerability ID: [0m75180
+[1m   Affected spec: [0m<25.0
+[1m   ADVISORY: [0mPip solves a security vulnerability that previously
+   allowed maliciously crafted wheel files to execute unauthorized code...
+[1m   PVE-2025-75180[0m
+[1m   For more information about this vulnerability, visit
+   [0mhttps://data.safetycli.com/v/75180/97c[0m
+   To ignore this vulnerability, use PyUp vulnerability id 75180 in safety’s
+   ignore command-line argument or add the ignore to your safety policy file.
+
+
+[31m-> Vulnerability found in pip version 24.0[0m
+[1m   Vulnerability ID: [0m79883
+[1m   Affected spec: [0m<25.2
+[1m   ADVISORY: [0mAffected versions of the pip package are vulnerable to
+   Arbitrary File Overwrite due to improper validation of symbolic link...
+[1m   CVE-2025-8869[0m
+[1m   For more information about this vulnerability, visit
+   [0mhttps://data.safetycli.com/v/79883/97c[0m
+   To ignore this vulnerability, use PyUp vulnerability id 79883 in safety’s
+   ignore command-line argument or add the ignore to your safety policy file.
+
+
++==============================================================================+
+   [32m[1mREMEDIATIONS[0m
+
+  2 vulnerabilities were reported in 1 package. For detailed remediation & 
+  fix recommendations, upgrade to a commercial license. 
+
++==============================================================================+
+
+ Scan was completed. 2 vulnerabilities were reported. 
+
++==============================================================================+[0m
+
+
+[33m[1m+===========================================================================================================================================================================================+[0m
+
+
+[31m[1mDEPRECATED: [0m[33m[1mthis command (`check`) has been DEPRECATED, and will be unsupported beyond 01 June 2024.[0m
+
+
+[32mWe highly encourage switching to the new [0m[32m[1m`scan`[0m[32m command which is easier to use, more powerful, and can be set up to mimic the deprecated command if required.[0m
+
+
+[33m[1m+===========================================================================================================================================================================================+[0m
+
+
