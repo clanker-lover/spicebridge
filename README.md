@@ -23,7 +23,7 @@ pip install spicebridge
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.10+
 - [ngspice](https://ngspice.sourceforge.io/) installed and on PATH
 
 ## Quick Start
