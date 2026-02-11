@@ -42,6 +42,7 @@ from spicebridge.template_manager import (
     modify_component_in_netlist,
     substitute_params,
 )
+from spicebridge.web_viewer import get_viewer_server, start_viewer
 
 mcp = FastMCP("SPICEBridge")
 _manager = CircuitManager()
@@ -97,6 +98,9 @@ def create_circuit(netlist: str, models: list[str] | None = None) -> dict:
             _manager.set_ports(circuit_id, detected)
     except Exception:
         pass  # non-fatal
+    viewer = get_viewer_server()
+    if viewer is not None:
+        viewer.notify_change({"type": "circuit_created", "circuit_id": circuit_id})
     preview_lines = netlist.strip().splitlines()[:5]
     return {
         "status": "ok",
@@ -129,6 +133,9 @@ def run_ac_analysis(
         raw_path = circuit.output_dir / "circuit.raw"
         results = parse_results(raw_path)
         _manager.update_results(circuit_id, results)
+        viewer = get_viewer_server()
+        if viewer is not None:
+            viewer.notify_change({"type": "results_updated", "circuit_id": circuit_id})
         return {"status": "ok", "results": results}
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -161,6 +168,9 @@ def run_transient(
         raw_path = circuit.output_dir / "circuit.raw"
         results = parse_results(raw_path)
         _manager.update_results(circuit_id, results)
+        viewer = get_viewer_server()
+        if viewer is not None:
+            viewer.notify_change({"type": "results_updated", "circuit_id": circuit_id})
         return {"status": "ok", "results": results}
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -183,6 +193,9 @@ def run_dc_op(circuit_id: str) -> dict:
         raw_path = circuit.output_dir / "circuit.raw"
         results = parse_results(raw_path)
         _manager.update_results(circuit_id, results)
+        viewer = get_viewer_server()
+        if viewer is not None:
+            viewer.notify_change({"type": "results_updated", "circuit_id": circuit_id})
         return {"status": "ok", "results": results}
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -241,6 +254,20 @@ def export_kicad(circuit_id: str, filename: str | None = None) -> dict:
         }
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+@mcp.tool()
+def open_viewer(circuit_id: str | None = None, port: int = 8080) -> dict:
+    """Start the interactive web schematic viewer and return its URL."""
+    try:
+        url = start_viewer(_manager, port=port)
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    result: dict = {"status": "ok", "url": url, "port": port}
+    if circuit_id is not None:
+        result["circuit_id"] = circuit_id
+        result["hint"] = f"Open {url}#circuit={circuit_id} to view this circuit"
+    return result
 
 
 @mcp.tool()
@@ -450,6 +477,9 @@ def modify_component(circuit_id: str, component: str, value: str) -> dict:
         return {"status": "error", "error": str(e)}
 
     _manager.update_netlist(circuit_id, new_netlist)
+    viewer = get_viewer_server()
+    if viewer is not None:
+        viewer.notify_change({"type": "circuit_updated", "circuit_id": circuit_id})
     preview_lines = new_netlist.strip().splitlines()[:5]
     return {
         "status": "ok",

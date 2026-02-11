@@ -57,3 +57,13 @@ class CircuitManager:
     def get_ports(self, circuit_id: str) -> dict[str, str] | None:
         """Return port definitions for a circuit, or None if not set."""
         return self.get(circuit_id).ports
+
+    def list_all(self) -> list[dict]:
+        """Return summary info for all stored circuits."""
+        return [
+            {
+                "circuit_id": cid,
+                "has_results": state.last_results is not None,
+            }
+            for cid, state in self._circuits.items()
+        ]

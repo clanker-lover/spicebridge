@@ -14,22 +14,29 @@ dependencies = [
     "mcp[cli]>=1.25,<2",
     "schemdraw",
     "matplotlib",
+    "aiohttp>=3.9,<4",
 ]
 
 [project.scripts]
 spicebridge = "spicebridge.__main__:main"
+spicebridge-viewer = "spicebridge.web_viewer:main"
 
 [project.optional-dependencies]
 dev = [
     "ruff",
     "pytest",
+    "pytest-asyncio",
+    "pytest-aiohttp",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-spicebridge = ["templates/*.json"]
+spicebridge = ["templates/*.json", "static/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 88
@@ -40,3 +47,5 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/spicebridge/kicad_export.py" = ["E501"]
+"src/spicebridge/svg_renderer.py" = ["E501"]
+"src/spicebridge/web_viewer.py" = ["E501"]

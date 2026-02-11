@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPICEBridge Viewer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #1e1e1e; color: #e0e0e0;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+}
+header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px; background: #2d2d2d; border-bottom: 1px solid #3a3a3a;
+    flex-shrink: 0;
+}
+header h1 { font-size: 16px; font-weight: 600; color: #4fc3f7; }
+.toolbar { display: flex; align-items: center; gap: 10px; }
+.toolbar select, .toolbar button {
+    background: #3a3a3a; color: #e0e0e0; border: 1px solid #555;
+    padding: 4px 10px; border-radius: 4px; font-size: 13px; cursor: pointer;
+}
+.toolbar select:hover, .toolbar button:hover { border-color: #4fc3f7; }
+.toolbar button:active { background: #4fc3f7; color: #1e1e1e; }
+.main { display: flex; flex: 1; overflow: hidden; }
+.schematic-area {
+    flex: 1; position: relative; overflow: hidden; cursor: grab;
+    background: #1e1e1e;
+}
+.schematic-area.panning { cursor: grabbing; }
+.schematic-area svg { width: 100%; height: 100%; display: block; }
+.sidebar {
+    width: 280px; background: #252525; border-left: 1px solid #3a3a3a;
+    display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
+}
+.sidebar-section { padding: 12px; border-bottom: 1px solid #3a3a3a; }
+.sidebar-section h2 {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    color: #888; margin-bottom: 8px; letter-spacing: 0.5px;
+}
+.sidebar-section ul {
+    list-style: none; max-height: 200px; overflow-y: auto;
+}
+.sidebar-section li {
+    padding: 3px 6px; font-size: 13px; font-family: monospace;
+    border-radius: 3px; cursor: pointer;
+}
+.sidebar-section li:hover { background: #3a3a3a; }
+.sidebar-section li.active { background: #4fc3f740; color: #4fc3f7; }
+.results-panel { flex: 1; overflow-y: auto; padding: 12px; }
+.results-panel h2 {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    color: #888; margin-bottom: 8px; letter-spacing: 0.5px;
+}
+.results-panel pre {
+    font-size: 12px; font-family: monospace; color: #ff8a65;
+    white-space: pre-wrap; word-break: break-all;
+}
+.status-dot {
+    width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+    margin-right: 6px;
+}
+.status-dot.connected { background: #81c784; }
+.status-dot.disconnected { background: #ef5350; }
+.empty-state {
+    display: flex; align-items: center; justify-content: center;
+    height: 100%; color: #666; font-size: 14px; text-align: center;
+    padding: 20px;
+}
+</style>
+</head>
+<body>
+<header>
+    <h1>SPICEBridge Viewer</h1>
+    <div class="toolbar">
+        <span class="status-dot disconnected" id="ws-status" title="WebSocket status"></span>
+        <select id="circuit-select">
+            <option value="">-- Select Circuit --</option>
+        </select>
+        <button id="btn-fit" title="Fit to view">Fit</button>
+        <button id="btn-refresh" title="Refresh circuits">Refresh</button>
+    </div>
+</header>
+<div class="main">
+    <div class="schematic-area" id="schematic-area">
+        <div class="empty-state" id="empty-state">
+            Select a circuit to view its schematic
+        </div>
+    </div>
+    <div class="sidebar">
+        <div class="sidebar-section">
+            <h2>Components</h2>
+            <ul id="comp-list"></ul>
+        </div>
+        <div class="results-panel">
+            <h2>Simulation Results</h2>
+            <pre id="results-display">No results</pre>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    'use strict';
+
+    const area = document.getElementById('schematic-area');
+    const emptyState = document.getElementById('empty-state');
+    const circuitSelect = document.getElementById('circuit-select');
+    const compList = document.getElementById('comp-list');
+    const resultsDisplay = document.getElementById('results-display');
+    const btnFit = document.getElementById('btn-fit');
+    const btnRefresh = document.getElementById('btn-refresh');
+    const wsStatus = document.getElementById('ws-status');
+
+    let currentCircuitId = null;
+    let svgElement = null;
+    let originalViewBox = null;
+    let viewBox = { x: 0, y: 0, w: 800, h: 600 };
+    let isPanning = false;
+    let panStart = { x: 0, y: 0 };
+    let ws = null;
+    let wsReconnectTimer = null;
+    let pollTimer = null;
+
+    // --- API helpers ---
+    async function apiFetch(path) {
+        const resp = await fetch(path);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp;
+    }
+
+    async function loadCircuits() {
+        try {
+            const resp = await apiFetch('/api/circuits');
+            const data = await resp.json();
+            circuitSelect.innerHTML = '<option value="">-- Select Circuit --</option>';
+            (data || []).forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.circuit_id;
+                opt.textContent = c.circuit_id + (c.has_results ? ' (simulated)' : '');
+                circuitSelect.appendChild(opt);
+            });
+            // Restore selection from URL hash
+            const hash = parseHash();
+            if (hash.circuit && !currentCircuitId) {
+                circuitSelect.value = hash.circuit;
+                loadCircuit(hash.circuit);
+            }
+        } catch (e) {
+            console.error('Failed to load circuits:', e);
+        }
+    }
+
+    async function loadCircuit(id) {
+        if (!id) {
+            currentCircuitId = null;
+            emptyState.style.display = 'flex';
+            if (svgElement) { svgElement.remove(); svgElement = null; }
+            compList.innerHTML = '';
+            resultsDisplay.textContent = 'No results';
+            updateHash('');
+            return;
+        }
+        currentCircuitId = id;
+        updateHash(id);
+        emptyState.style.display = 'none';
+
+        // Load SVG
+        try {
+            const resp = await apiFetch(`/api/circuit/${id}/svg`);
+            const svgText = await resp.text();
+            // Remove old SVG
+            if (svgElement) svgElement.remove();
+            area.insertAdjacentHTML('beforeend', svgText);
+            svgElement = area.querySelector('svg');
+            if (svgElement) {
+                const vb = svgElement.getAttribute('viewBox');
+                if (vb) {
+                    const parts = vb.split(/\s+/).map(Number);
+                    originalViewBox = { x: parts[0], y: parts[1], w: parts[2], h: parts[3] };
+                    viewBox = { ...originalViewBox };
+                }
+                setupSvgInteraction();
+            }
+        } catch (e) {
+            console.error('Failed to load SVG:', e);
+        }
+
+        // Load circuit info for sidebar
+        try {
+            const resp = await apiFetch(`/api/circuit/${id}`);
+            const data = await resp.json();
+            compList.innerHTML = '';
+            (data.components || []).forEach(c => {
+                const li = document.createElement('li');
+                li.textContent = `${c.ref}: ${c.value} (${c.comp_type})`;
+                li.dataset.ref = c.ref;
+                li.addEventListener('mouseenter', () => highlightComponent(c.ref, true));
+                li.addEventListener('mouseleave', () => highlightComponent(c.ref, false));
+                compList.appendChild(li);
+            });
+        } catch (e) {
+            console.error('Failed to load circuit info:', e);
+        }
+
+        // Load results
+        await loadResults(id);
+    }
+
+    async function loadResults(id) {
+        try {
+            const resp = await apiFetch(`/api/circuit/${id}/results`);
+            const data = await resp.json();
+            if (data && data.results) {
+                resultsDisplay.textContent = JSON.stringify(data.results, null, 2);
+            } else {
+                resultsDisplay.textContent = 'No simulation results yet';
+            }
+        } catch (e) {
+            resultsDisplay.textContent = 'Failed to load results';
+        }
+    }
+
+    // --- SVG interaction ---
+    function setupSvgInteraction() {
+        if (!svgElement) return;
+
+        // Component hover highlighting
+        svgElement.querySelectorAll('.component').forEach(g => {
+            g.addEventListener('mouseenter', () => {
+                g.classList.add('highlight');
+                const ref = g.dataset.ref;
+                compList.querySelectorAll('li').forEach(li => {
+                    li.classList.toggle('active', li.dataset.ref === ref);
+                });
+            });
+            g.addEventListener('mouseleave', () => {
+                g.classList.remove('highlight');
+                compList.querySelectorAll('li.active').forEach(li => li.classList.remove('active'));
+            });
+        });
+
+        // Net hover highlighting
+        svgElement.querySelectorAll('.wire').forEach(wire => {
+            wire.addEventListener('mouseenter', () => {
+                const node = wire.dataset.node;
+                svgElement.querySelectorAll(`[data-node="${node}"]`).forEach(el => {
+                    el.classList.add('highlight');
+                });
+            });
+            wire.addEventListener('mouseleave', () => {
+                const node = wire.dataset.node;
+                svgElement.querySelectorAll(`[data-node="${node}"]`).forEach(el => {
+                    el.classList.remove('highlight');
+                });
+            });
+        });
+    }
+
+    function highlightComponent(ref, on) {
+        if (!svgElement) return;
+        const g = svgElement.querySelector(`#component-${ref}`);
+        if (g) g.classList.toggle('highlight', on);
+    }
+
+    // --- Pan & zoom ---
+    area.addEventListener('mousedown', (e) => {
+        if (e.button !== 0 || !svgElement) return;
+        isPanning = true;
+        panStart = { x: e.clientX, y: e.clientY };
+        area.classList.add('panning');
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isPanning || !svgElement) return;
+        const dx = e.clientX - panStart.x;
+        const dy = e.clientY - panStart.y;
+        panStart = { x: e.clientX, y: e.clientY };
+
+        const rect = area.getBoundingClientRect();
+        const scaleX = viewBox.w / rect.width;
+        const scaleY = viewBox.h / rect.height;
+        viewBox.x -= dx * scaleX;
+        viewBox.y -= dy * scaleY;
+        applyViewBox();
+    });
+
+    window.addEventListener('mouseup', () => {
+        isPanning = false;
+        area.classList.remove('panning');
+    });
+
+    area.addEventListener('wheel', (e) => {
+        if (!svgElement) return;
+        e.preventDefault();
+        const zoomFactor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+        const rect = area.getBoundingClientRect();
+        const mx = (e.clientX - rect.left) / rect.width;
+        const my = (e.clientY - rect.top) / rect.height;
+
+        const newW = viewBox.w * zoomFactor;
+        const newH = viewBox.h * zoomFactor;
+        viewBox.x += (viewBox.w - newW) * mx;
+        viewBox.y += (viewBox.h - newH) * my;
+        viewBox.w = newW;
+        viewBox.h = newH;
+        applyViewBox();
+    }, { passive: false });
+
+    function applyViewBox() {
+        if (svgElement) {
+            svgElement.setAttribute('viewBox', `${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`);
+        }
+    }
+
+    btnFit.addEventListener('click', () => {
+        if (originalViewBox) {
+            viewBox = { ...originalViewBox };
+            applyViewBox();
+        }
+    });
+
+    // --- Circuit selector ---
+    circuitSelect.addEventListener('change', () => {
+        loadCircuit(circuitSelect.value);
+    });
+
+    btnRefresh.addEventListener('click', loadCircuits);
+
+    // --- URL hash ---
+    function parseHash() {
+        const hash = window.location.hash.slice(1);
+        const params = {};
+        hash.split('&').forEach(part => {
+            const [k, v] = part.split('=');
+            if (k && v) params[k] = decodeURIComponent(v);
+        });
+        return params;
+    }
+
+    function updateHash(circuitId) {
+        if (circuitId) {
+            window.location.hash = `circuit=${circuitId}`;
+        } else {
+            window.location.hash = '';
+        }
+    }
+
+    // --- WebSocket ---
+    function connectWS() {
+        if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const url = `${proto}//${window.location.host}/ws`;
+        try {
+            ws = new WebSocket(url);
+        } catch (e) {
+            startFallbackPolling();
+            return;
+        }
+        ws.onopen = () => {
+            wsStatus.classList.remove('disconnected');
+            wsStatus.classList.add('connected');
+            wsStatus.title = 'WebSocket connected';
+            stopFallbackPolling();
+        };
+        ws.onmessage = (e) => {
+            try {
+                const msg = JSON.parse(e.data);
+                handleEvent(msg);
+            } catch (err) {
+                console.error('WS message parse error:', err);
+            }
+        };
+        ws.onclose = () => {
+            wsStatus.classList.remove('connected');
+            wsStatus.classList.add('disconnected');
+            wsStatus.title = 'WebSocket disconnected';
+            wsReconnectTimer = setTimeout(connectWS, 3000);
+            startFallbackPolling();
+        };
+        ws.onerror = () => {
+            ws.close();
+        };
+    }
+
+    function handleEvent(msg) {
+        if (msg.type === 'circuit_created') {
+            loadCircuits();
+        } else if (msg.type === 'results_updated' || msg.type === 'circuit_updated') {
+            if (msg.circuit_id === currentCircuitId) {
+                loadCircuit(currentCircuitId);
+            }
+            loadCircuits();
+        }
+    }
+
+    function startFallbackPolling() {
+        if (pollTimer) return;
+        pollTimer = setInterval(() => {
+            loadCircuits();
+            if (currentCircuitId) loadResults(currentCircuitId);
+        }, 5000);
+    }
+
+    function stopFallbackPolling() {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    // --- Init ---
+    loadCircuits();
+    connectWS();
+})();
+</script>
+</body>
+</html>
