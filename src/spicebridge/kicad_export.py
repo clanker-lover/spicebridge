@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from spicebridge.sanitize import validate_filename
+from spicebridge.sanitize import safe_path, validate_filename
 from spicebridge.schematic import ParsedComponent, _is_ground, parse_netlist
 
 # ---------------------------------------------------------------------------
@@ -828,7 +828,7 @@ def export_kicad_schematic(
         output_dir = Path.cwd()
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / filename
+    output_path = safe_path(output_dir, filename)
     output_path.write_text(content, encoding="utf-8")
 
     return output_path, warnings

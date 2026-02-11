@@ -59,18 +59,35 @@ _OPAMP_DEFAULTS: dict[str, float] = {
 def _generate_opamp(name: str, params: dict) -> GeneratedModel:  # noqa: N802
     p = {**_OPAMP_DEFAULTS, **(params or {})}
 
-    adc = 10 ** (p["dc_gain_db"] / 20)
-    f_pole = p["gbw_hz"] / adc
+    try:
+        dc_gain_db = float(p["dc_gain_db"])
+        gbw_hz = float(p["gbw_hz"])
+        input_impedance_mohm = float(p["input_impedance_mohm"])
+        input_bias_na = float(p["input_bias_na"])
+        input_offset_mv = float(p["input_offset_mv"])
+        cmrr_db = float(p["cmrr_db"])
+        slew_rate_v_us = float(p["slew_rate_v_us"])
+        output_impedance_ohm = float(p["output_impedance_ohm"])
+        output_swing_v = float(p["output_swing_v"])
+        supply_current_ma = float(p["supply_current_ma"])
+        float(p["psrr_db"])
+        float(p["vos_drift_uv_c"])
+        float(p["supply_voltage_v"])
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"Invalid model parameter value: {exc}") from exc
+
+    adc = 10 ** (dc_gain_db / 20)
+    f_pole = gbw_hz / adc
     rpole = 1e6
     cpole = 1 / (2 * math.pi * f_pole * rpole)
-    rin = p["input_impedance_mohm"] * 1e6
-    ibias = p["input_bias_na"] * 1e-9
-    vos = p["input_offset_mv"] * 1e-3
-    cmrr_linear = 10 ** (p["cmrr_db"] / 20)
-    islew = p["slew_rate_v_us"] * 1e6 * cpole
-    rout = p["output_impedance_ohm"]
-    swing = p["output_swing_v"]
-    isupp = p["supply_current_ma"] * 1e-3
+    rin = input_impedance_mohm * 1e6
+    ibias = input_bias_na * 1e-9
+    vos = input_offset_mv * 1e-3
+    cmrr_linear = 10 ** (cmrr_db / 20)
+    islew = slew_rate_v_us * 1e6 * cpole
+    rout = output_impedance_ohm
+    swing = output_swing_v
+    isupp = supply_current_ma * 1e-3
 
     # Build behavioural expression strings (must stay on one line each)
     egain_expr = (
@@ -161,17 +178,30 @@ def _generate_bjt(name: str, params: dict) -> GeneratedModel:
     if bjt_type not in ("NPN", "PNP"):
         raise ValueError(f"BJT type must be NPN or PNP, got '{bjt_type}'")
 
+    try:
+        bf = float(p["bf"])
+        is_a = float(p["is_a"])
+        vaf_v = float(p["vaf_v"])
+        cje_pf = float(p["cje_pf"])
+        cjc_pf = float(p["cjc_pf"])
+        tf_ns = float(p["tf_ns"])
+        rb_ohm = float(p["rb_ohm"])
+        rc_ohm = float(p["rc_ohm"])
+        re_ohm = float(p["re_ohm"])
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"Invalid model parameter value: {exc}") from exc
+
     text = (
         f".model {name} {bjt_type} ("
-        f"BF={p['bf']} "
-        f"IS={float(p['is_a']):.4e} "
-        f"VAF={p['vaf_v']} "
-        f"CJE={p['cje_pf']}p "
-        f"CJC={p['cjc_pf']}p "
-        f"TF={p['tf_ns']}n "
-        f"RB={p['rb_ohm']} "
-        f"RC={p['rc_ohm']} "
-        f"RE={p['re_ohm']}"
+        f"BF={bf} "
+        f"IS={is_a:.4e} "
+        f"VAF={vaf_v} "
+        f"CJE={cje_pf}p "
+        f"CJC={cjc_pf}p "
+        f"TF={tf_ns}n "
+        f"RB={rb_ohm} "
+        f"RC={rc_ohm} "
+        f"RE={re_ohm}"
         f")\n"
     )
 
@@ -209,20 +239,32 @@ def _generate_mosfet(name: str, params: dict) -> GeneratedModel:
     if mos_type not in ("NMOS", "PMOS"):
         raise ValueError(f"MOSFET type must be NMOS or PMOS, got '{mos_type}'")
 
+    try:
+        vth = float(p["vth_v"])
+        kp_ua_v2 = float(p["kp_ua_v2"])
+        lambda_v = float(p["lambda_v"])
+        cbd_pf = float(p["cbd_pf"])
+        cbs_pf = float(p["cbs_pf"])
+        cgso_pf = float(p["cgso_pf"])
+        cgdo_pf = float(p["cgdo_pf"])
+        w_um = float(p["w_um"])
+        l_um = float(p["l_um"])
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"Invalid model parameter value: {exc}") from exc
+
     # PMOS default Vth should be negative if user didn't override
-    vth = float(p["vth_v"])
     if mos_type == "PMOS" and "vth_v" not in (params or {}):
         vth = -abs(vth)
 
     text = (
         f".model {name} {mos_type} ("
         f"VTO={vth} "
-        f"KP={p['kp_ua_v2']}u "
-        f"LAMBDA={p['lambda_v']} "
-        f"CBD={p['cbd_pf']}p "
-        f"CBS={p['cbs_pf']}p "
-        f"CGSO={p['cgso_pf']}p "
-        f"CGDO={p['cgdo_pf']}p"
+        f"KP={kp_ua_v2}u "
+        f"LAMBDA={lambda_v} "
+        f"CBD={cbd_pf}p "
+        f"CBS={cbs_pf}p "
+        f"CGSO={cgso_pf}p "
+        f"CGDO={cgdo_pf}p"
         f")\n"
     )
 
@@ -233,8 +275,8 @@ def _generate_mosfet(name: str, params: dict) -> GeneratedModel:
         parameters=p,
         metadata={
             "instance_params": {
-                "W": f"{p['w_um']}u",
-                "L": f"{p['l_um']}u",
+                "W": f"{w_um}u",
+                "L": f"{l_um}u",
             },
         },
         notes=[],
@@ -258,14 +300,24 @@ _DIODE_DEFAULTS: dict[str, object] = {
 def _generate_diode(name: str, params: dict) -> GeneratedModel:
     p = {**_DIODE_DEFAULTS, **(params or {})}
 
+    try:
+        is_a = float(p["is_a"])
+        n = float(p["n"])
+        bv_v = float(p["bv_v"])
+        rs_ohm = float(p["rs_ohm"])
+        cjo_pf = float(p["cjo_pf"])
+        tt_ns = float(p["tt_ns"])
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"Invalid model parameter value: {exc}") from exc
+
     text = (
         f".model {name} D ("
-        f"IS={float(p['is_a']):.4e} "
-        f"N={p['n']} "
-        f"BV={p['bv_v']} "
-        f"RS={p['rs_ohm']} "
-        f"CJO={p['cjo_pf']}p "
-        f"TT={p['tt_ns']}n"
+        f"IS={is_a:.4e} "
+        f"N={n} "
+        f"BV={bv_v} "
+        f"RS={rs_ohm} "
+        f"CJO={cjo_pf}p "
+        f"TT={tt_ns}n"
         f")\n"
     )
 

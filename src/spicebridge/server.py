@@ -30,10 +30,12 @@ from spicebridge.parser import (
     read_ac_bandwidth,
 )
 from spicebridge.sanitize import (
+    safe_path,
     sanitize_netlist,
     validate_component_value,
     validate_filename,
     validate_format,
+    validate_include_paths,
 )
 from spicebridge.schematic import draw_schematic as _draw_schematic
 from spicebridge.schematic import parse_netlist
@@ -145,6 +147,13 @@ def run_ac_analysis(
     except KeyError as e:
         return {"status": "error", "error": str(e)}
 
+    try:
+        points_per_decade = int(points_per_decade)
+        start_freq = float(start_freq)
+        stop_freq = float(stop_freq)
+    except (ValueError, TypeError) as exc:
+        return {"status": "error", "error": f"Invalid analysis parameter: {exc}"}
+
     analysis_line = f".ac dec {points_per_decade} {start_freq} {stop_freq}"
     prepared = _prepare_netlist(circuit.netlist, analysis_line)
 
@@ -175,6 +184,14 @@ def run_transient(
         circuit = _manager.get(circuit_id)
     except KeyError as e:
         return {"status": "error", "error": str(e)}
+
+    try:
+        stop_time = float(stop_time)
+        step_time = float(step_time)
+        if startup_time is not None:
+            startup_time = float(startup_time)
+    except (ValueError, TypeError) as exc:
+        return {"status": "error", "error": f"Invalid analysis parameter: {exc}"}
 
     if startup_time is not None:
         analysis_line = f".tran {step_time} {stop_time} {startup_time}"
@@ -250,7 +267,7 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> dict:
         return {"status": "error", "error": str(e)}
 
     try:
-        output_file = circuit.output_dir / f"schematic.{fmt}"
+        output_file = safe_path(circuit.output_dir, f"schematic.{fmt}")
         _draw_schematic(circuit.netlist, output_file, fmt=fmt)
         return {"status": "ok", "filepath": str(output_file), "format": fmt}
     except Exception as e:
@@ -398,6 +415,7 @@ def connect_stages(
 
     try:
         sanitize_netlist(result["netlist"], _allow_includes=True)
+        validate_include_paths(result["netlist"], [_models.base_dir])
     except ValueError as e:
         return {"status": "error", "error": str(e)}
 
@@ -473,6 +491,7 @@ def load_template(
 
     try:
         sanitize_netlist(netlist, _allow_includes=True)
+        validate_include_paths(netlist, [_models.base_dir])
     except ValueError as e:
         return {"status": "error", "error": str(e)}
 

@@ -164,6 +164,27 @@ def safe_path(base_dir: Path, user_input: str) -> Path:
     return resolved
 
 
+_INCLUDE_RE = re.compile(
+    r'^\s*\.(include|lib)\s+"?([^"\s]+)"?', re.IGNORECASE | re.MULTILINE
+)
+
+
+def validate_include_paths(netlist: str, allowed_dirs: list[Path]) -> None:
+    """Validate that all .include/.lib paths resolve within allowed directories.
+
+    Raises ValueError if any include path escapes the allowed directories.
+    """
+    resolved_allowed = [d.resolve() for d in allowed_dirs]
+    for m in _INCLUDE_RE.finditer(netlist):
+        inc_path = Path(m.group(2)).resolve()
+        if not any(
+            inc_path == d or inc_path.is_relative_to(d) for d in resolved_allowed
+        ):
+            raise ValueError(
+                f"Include path '{m.group(2)}' resolves outside allowed directories"
+            )
+
+
 def validate_filename(filename: str) -> str:
     """Validate a filename contains no path separators or traversal.
 

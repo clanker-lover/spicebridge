@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from spicebridge.model_generator import GeneratedModel
+from spicebridge.sanitize import safe_path
 
 
 class ModelStore:
@@ -18,6 +19,11 @@ class ModelStore:
     def __init__(self, base_dir: Path | None = None) -> None:
         self._base_dir = base_dir or Path.home() / ".spicebridge" / "models"
         self._index: dict | None = None  # lazy-loaded cache
+
+    @property
+    def base_dir(self) -> Path:
+        """The root directory where model .lib files are stored."""
+        return self._base_dir
 
     # -- internal helpers ---------------------------------------------------
 
@@ -50,7 +56,7 @@ class ModelStore:
         Returns the absolute path to the ``.lib`` file.
         """
         self._ensure_dir()
-        lib_path = self._base_dir / f"{model.name}.lib"
+        lib_path = safe_path(self._base_dir, f"{model.name}.lib")
         lib_path.write_text(model.spice_text)
 
         index = self._load_index()
@@ -71,7 +77,7 @@ class ModelStore:
         index = self._load_index()
         if name not in index:
             raise KeyError(f"Model '{name}' not found")
-        lib_path = self._base_dir / f"{name}.lib"
+        lib_path = safe_path(self._base_dir, f"{name}.lib")
         if not lib_path.exists():
             raise KeyError(
                 f"Model '{name}' index entry exists but .lib file is missing"
@@ -103,7 +109,7 @@ class ModelStore:
         index = self._load_index()
         if name not in index:
             raise KeyError(f"Model '{name}' not found")
-        lib_path = self._base_dir / f"{name}.lib"
+        lib_path = safe_path(self._base_dir, f"{name}.lib")
         if lib_path.exists():
             lib_path.unlink()
         del index[name]
@@ -117,4 +123,4 @@ class ModelStore:
         index = self._load_index()
         if name not in index:
             raise KeyError(f"Model '{name}' not found")
-        return self._base_dir / f"{name}.lib"
+        return safe_path(self._base_dir, f"{name}.lib")

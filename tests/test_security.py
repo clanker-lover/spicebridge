@@ -8,6 +8,7 @@ Unit-level sanitization is covered in test_sanitize.py.
 from __future__ import annotations
 
 import ast
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -16,16 +17,20 @@ from unittest.mock import patch
 import pytest
 
 from spicebridge.circuit_manager import CircuitManager
+from spicebridge.model_generator import generate_model
+from spicebridge.sanitize import validate_include_paths
 from spicebridge.server import (
     connect_stages,
     create_circuit,
     draw_schematic,
     export_kicad,
     modify_component,
+    run_ac_analysis,
     run_monte_carlo,
     set_ports,
 )
 from spicebridge.simulator import validate_netlist_syntax
+from spicebridge.template_manager import TemplateManager
 from spicebridge.web_viewer import _ViewerServer
 
 # ---------------------------------------------------------------------------
@@ -453,3 +458,169 @@ class TestConnectStagesValidation:
             result = connect_stages([{"circuit_id": cid, "label": label}])
             if result["status"] == "error":
                 assert "Invalid stage label" not in result["error"]
+
+
+# ===========================================================================
+# Class 10: Model Type Injection
+# ===========================================================================
+
+
+class TestModelTypeInjection:
+    """Verify model generators reject injected type strings."""
+
+    def test_bjt_rejects_injected_type(self):
+        with pytest.raises(ValueError, match="BJT type must be NPN or PNP"):
+            generate_model("bjt", "Q1", {"type": "NPN\n.system pwned"})
+
+    @pytest.mark.parametrize("bjt_type", ["NPN", "PNP", "npn", "pnp"])
+    def test_bjt_accepts_valid_types(self, bjt_type):
+        model = generate_model("bjt", "Q1", {"type": bjt_type})
+        assert model.component_type == "bjt"
+
+    def test_mosfet_rejects_injected_type(self):
+        with pytest.raises(ValueError, match="MOSFET type must be NMOS or PMOS"):
+            generate_model("mosfet", "M1", {"type": "NMOS\n.shell cmd"})
+
+    @pytest.mark.parametrize("mos_type", ["NMOS", "PMOS", "nmos", "pmos"])
+    def test_mosfet_accepts_valid_types(self, mos_type):
+        model = generate_model("mosfet", "M1", {"type": mos_type})
+        assert model.component_type == "mosfet"
+
+
+# ===========================================================================
+# Class 11: Model Parameter Injection
+# ===========================================================================
+
+
+class TestModelParameterInjection:
+    """Verify model generators reject non-numeric parameter values."""
+
+    def test_bjt_rejects_string_parameter(self):
+        with pytest.raises(ValueError, match="Invalid model parameter value"):
+            generate_model(
+                "bjt", "Q1", {"bf": "200) ; .control\nshell rm -rf /\n.endc"}
+            )
+
+    def test_diode_rejects_string_parameter(self):
+        with pytest.raises(ValueError, match="Invalid model parameter value"):
+            generate_model(
+                "diode", "D1", {"n": "1.05) ; .control\nshell rm -rf /\n.endc"}
+            )
+
+    def test_mosfet_rejects_string_parameter(self):
+        with pytest.raises(ValueError, match="Invalid model parameter value"):
+            generate_model("mosfet", "M1", {"kp_ua_v2": "200u\n.system pwned"})
+
+    def test_opamp_rejects_string_parameter(self):
+        with pytest.raises(ValueError, match="Invalid model parameter value"):
+            generate_model("opamp", "U1", {"dc_gain_db": "100\n.system echo pwned"})
+
+
+# ===========================================================================
+# Class 12: Include Path Validation
+# ===========================================================================
+
+
+class TestIncludePathValidation:
+    """Verify validate_include_paths blocks directory escape."""
+
+    def test_rejects_etc_passwd(self, tmp_path):
+        netlist = "* title\n.include /etc/passwd\n.end\n"
+        with pytest.raises(ValueError, match="resolves outside allowed directories"):
+            validate_include_paths(netlist, [tmp_path])
+
+    def test_accepts_valid_models_dir(self, tmp_path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        netlist = f"* title\n.include {models_dir / 'foo.lib'}\n.end\n"
+        # Should not raise
+        validate_include_paths(netlist, [models_dir])
+
+    def test_rejects_traversal(self, tmp_path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        netlist = f"* title\n.include {models_dir / '../../etc/passwd'}\n.end\n"
+        with pytest.raises(ValueError, match="resolves outside allowed directories"):
+            validate_include_paths(netlist, [models_dir])
+
+    def test_rejects_lib_directive(self, tmp_path):
+        netlist = "* title\n.lib /etc/shadow\n.end\n"
+        with pytest.raises(ValueError, match="resolves outside allowed directories"):
+            validate_include_paths(netlist, [tmp_path])
+
+
+# ===========================================================================
+# Class 13: Template Symlink Check
+# ===========================================================================
+
+
+class TestTemplateSymlinkCheck:
+    """Verify symlinked user templates are skipped."""
+
+    def test_symlink_template_is_skipped(self, tmp_path):
+        user_dir = tmp_path / "templates"
+        user_dir.mkdir()
+
+        # Create a real template file
+        real_template = {
+            "id": "real_test",
+            "name": "Real Template",
+            "category": "test",
+            "description": "A real template",
+            "netlist": "* test\n.end\n",
+        }
+        real_file = user_dir / "real.json"
+        real_file.write_text(json.dumps(real_template))
+
+        # Create a symlink template
+        target = tmp_path / "external.json"
+        target.write_text(
+            json.dumps(
+                {
+                    "id": "symlink_test",
+                    "name": "Symlink Template",
+                    "category": "test",
+                    "description": "A symlinked template",
+                    "netlist": "* test\n.end\n",
+                }
+            )
+        )
+        symlink_file = user_dir / "symlink.json"
+        symlink_file.symlink_to(target)
+
+        tm = TemplateManager()
+        nonexistent = tmp_path / "nonexistent"
+        with (
+            patch.object(TemplateManager, "_user_dir", return_value=user_dir),
+            patch.object(TemplateManager, "_builtin_dir", return_value=nonexistent),
+        ):
+            tm.reload()
+            templates = tm.list_templates()
+            template_ids = [t["id"] for t in templates]
+            assert "real_test" in template_ids
+            assert "symlink_test" not in template_ids
+
+
+# ===========================================================================
+# Class 14: Analysis Parameter Casting
+# ===========================================================================
+
+
+class TestAnalysisParameterCasting:
+    """Verify analysis tools reject non-numeric parameters."""
+
+    def test_ac_rejects_non_numeric_freq(self):
+        setup = create_circuit(_CLEAN_NETLIST)
+        assert setup["status"] == "ok"
+        cid = setup["circuit_id"]
+        result = run_ac_analysis(cid, start_freq="1; .system pwned")
+        assert result["status"] == "error"
+        assert "Invalid analysis parameter" in result["error"]
+
+    def test_ac_rejects_non_numeric_points(self):
+        setup = create_circuit(_CLEAN_NETLIST)
+        assert setup["status"] == "ok"
+        cid = setup["circuit_id"]
+        result = run_ac_analysis(cid, points_per_decade="ten")
+        assert result["status"] == "error"
+        assert "Invalid analysis parameter" in result["error"]

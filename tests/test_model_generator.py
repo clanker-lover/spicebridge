@@ -166,7 +166,7 @@ class TestBJT:
 
     def test_capacitance_suffix_p(self):
         model = generate_model("bjt", "QTest", {"type": "NPN", "cje_pf": 10})
-        assert "CJE=10p" in model.spice_text
+        assert "CJE=10.0p" in model.spice_text
 
     def test_transit_time_suffix_n(self):
         model = generate_model("bjt", "QTest", {"type": "NPN", "tf_ns": 0.5})
@@ -213,7 +213,7 @@ class TestMOSFET:
 
     def test_kp_suffix_u(self):
         model = generate_model("mosfet", "MTest", {"type": "NMOS", "kp_ua_v2": 400})
-        assert "KP=400u" in model.spice_text
+        assert "KP=400.0u" in model.spice_text
 
 
 # ---------------------------------------------------------------------------
@@ -238,8 +238,8 @@ class TestDiode:
 
     def test_cjo_suffix_p(self):
         model = generate_model("diode", "DTest", {"cjo_pf": 10})
-        assert "CJO=10p" in model.spice_text
+        assert "CJO=10.0p" in model.spice_text
 
     def test_tt_suffix_n(self):
         model = generate_model("diode", "DTest", {"tt_ns": 8})
-        assert "TT=8n" in model.spice_text
+        assert "TT=8.0n" in model.spice_text

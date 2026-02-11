@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import importlib.resources  # nosemgrep: python37-compatibility-importlib2
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from spicebridge.sanitize import validate_component_value
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -74,6 +77,9 @@ class TemplateManager:
         user = self._user_dir()
         if user.is_dir():
             for p in sorted(user.glob("*.json")):
+                if p.is_symlink():
+                    logger.warning("Skipping symlinked template: %s", p)
+                    continue
                 t = self._load_file(p, "user")
                 if t is not None:
                     templates[t.id] = t
