@@ -63,6 +63,13 @@ Steps 5-9 form the iteration loop. Repeat until specs are met or tradeoffs are u
 |------|-------------|
 | `draw_schematic` | Generate a schematic diagram from a stored circuit's netlist |
 
+### Model Library
+
+| Tool | Description |
+|------|-------------|
+| `create_model` | Generate a SPICE model (.lib) from datasheet parameters. Supports `opamp`, `bjt`, `mosfet`, `diode`. All parameters are optional with sensible defaults. Returns an `.include` statement for use in netlists |
+| `list_models` | List all saved custom models from the model library |
+
 ## Supported Topologies
 
 ### Filters
@@ -104,13 +111,14 @@ Note: `noninverting_opamp` has a solver but no template — use `calculate_compo
 6. **Show the schematic at milestones** — Call `draw_schematic` after initial design and after significant modifications so the user can see the circuit.
 7. **Use `modify_component` for iteration** — When tweaking values, modify the existing circuit rather than reloading the template.
 8. **Set appropriate simulation ranges** — For AC analysis, set `start_freq` and `stop_freq` to span at least 2 decades around the expected cutoff. For transient, set `stop_time` to at least 5 time constants.
+9. **Use real components via `create_model`** — Call `create_model` with datasheet specs, get the `.include` statement, and reference the model name in your circuit netlist. Or pass `models=["ModelName"]` to `create_circuit` / `load_template` to auto-inject the `.include` lines.
 
 ## Common Pitfalls
 
 1. **First line is the title** — In SPICE netlists, the first line is always a title/comment. It is not parsed as a circuit element.
 2. **SPICE mega is `meg`, not `M`** — In SPICE, `M` means milli (1e-3). Use `meg` for mega (1e6). Example: `1meg` = 1 MHz, `1M` = 1 milliohm.
 3. **Every circuit needs ground** — Node `0` is the ground reference. Every circuit must have at least one connection to node 0 or ngspice will error.
-4. **Templates use an ideal op-amp** — The built-in op-amp subcircuit has gain = 100,000. This is fine for most designs but doesn't model bandwidth, slew rate, or output swing limits.
+4. **Templates use an ideal op-amp** — The built-in op-amp subcircuit has gain = 100,000. For realistic behavior, use `create_model` to generate a model from real datasheet specs.
 5. **GBW >> cutoff for real op-amps** — If designing for a real op-amp, ensure its gain-bandwidth product is at least 10x the circuit's cutoff frequency to avoid gain error.
 6. **Don't include analysis commands in netlists** — The simulation tools (`.ac`, `.tran`, `.op`) add their own analysis lines. Including them in the netlist will cause conflicts.
 7. **`compare_specs` keys must match parser output** — Valid keys: `f_3dB_hz`, `gain_dc_dB`, `rolloff_rate_dB_per_decade`, `phase_at_f3dB_deg`, `peak_gain_dB`, `steady_state_value`, `rise_time_10_90_s`, `overshoot_pct`, `settling_time_1pct_s`. For DC operating point, use node names directly (e.g., `v(out)`).

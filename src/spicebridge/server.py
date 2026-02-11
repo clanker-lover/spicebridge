@@ -48,9 +48,29 @@ def _prepare_netlist(netlist: str, analysis_line: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _resolve_model_includes(model_names: list[str]) -> str:
+    """Return .include lines for the given model names, or raise ValueError."""
+    lines = []
+    for name in model_names:
+        try:
+            lib_path = _models.get_lib_path(name)
+            lines.append(f".include {lib_path}")
+        except KeyError:
+            raise ValueError(
+                f"Model '{name}' not found. Use list_models() to see available models."
+            ) from None
+    return "\n".join(lines)
+
+
 @mcp.tool()
-def create_circuit(netlist: str) -> dict:
+def create_circuit(netlist: str, models: list[str] | None = None) -> dict:
     """Store a SPICE netlist and return a circuit ID for subsequent analyses."""
+    if models:
+        try:
+            includes = _resolve_model_includes(models)
+        except ValueError as e:
+            return {"status": "error", "error": str(e)}
+        netlist = includes + "\n" + netlist
     circuit_id = _manager.create(netlist)
     preview_lines = netlist.strip().splitlines()[:5]
     return {
@@ -185,6 +205,7 @@ def load_template(
     template_id: str,
     params: dict | None = None,
     specs: dict | None = None,
+    models: list[str] | None = None,
 ) -> dict:
     """Load a circuit template and create a circuit from it.
 
@@ -233,6 +254,13 @@ def load_template(
 
     if params:
         netlist = substitute_params(netlist, params)
+
+    if models:
+        try:
+            includes = _resolve_model_includes(models)
+        except ValueError as e:
+            return {"status": "error", "error": str(e)}
+        netlist = includes + "\n" + netlist
 
     circuit_id = _manager.create(netlist)
     preview_lines = netlist.strip().splitlines()[:5]
