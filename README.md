@@ -6,6 +6,25 @@ AI-powered circuit design through simulation — an [MCP](https://modelcontextpr
 
 SPICEBridge exposes 18 tools over the Model Context Protocol, covering the full circuit design workflow: template-based design with auto-calculated component values, netlist creation, simulation (AC/transient/DC), automated measurement, spec verification, and schematic generation. It works locally with Claude Code (stdio) or remotely with any MCP client via HTTP and a Cloudflare tunnel.
 
+## The Problem
+
+SPICE has been the gold standard for circuit simulation for decades, but getting started with it is notoriously painful. Between learning netlist syntax, memorizing analysis commands, and wrangling output data, there's a steep gap between *knowing what circuit you want* and *actually simulating it*. Professional EDA tools solve some of this with GUIs, but they're expensive, complex, and not designed for quick iteration or automation.
+
+SPICEBridge closes that gap by letting you simulate circuits with AI. Instead of hand-writing netlists, you describe what you need in plain English — "design a 1 kHz low-pass filter" — and the AI handles the rest: picking a topology, calculating component values, running the simulation, and checking the results against your specs. It automates SPICE simulation through natural language circuit design, so you can focus on the engineering decisions instead of the syntax. Whether you want to design a filter with AI, automate repetitive simulation workflows, or build an AI agent that interacts with the physical world, SPICEBridge gives an LLM the tools to do real circuit simulation — no SPICE expertise required.
+
+## Who This Is For
+
+- **EE students** experimenting with AI-assisted circuit design and learning how circuits behave through fast iteration
+- **Hobbyists and makers** who know what they want to build but don't want to learn SPICE syntax to get there
+- **Engineers** automating repetitive simulation workflows — sweep parameters, check specs, generate reports
+- **AI agent builders** who need their agents to interact with the analog/physical world through simulation
+- **Educators** who want students focused on circuit concepts, not fighting tooling
+- **MCP developers** looking for a full-featured reference implementation of an MCP server with templates, measurement, and design automation
+
+## Why MCP?
+
+The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standard that lets AI assistants call external tools in a structured way. SPICEBridge implements MCP so that any compatible AI — Claude, or anything else that speaks the protocol — can run SPICE simulations directly, without custom integrations or glue code.
+
 ## Requirements
 
 - Python >= 3.10
