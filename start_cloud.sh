@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Start SPICEBridge MCP server with a Cloudflare quick tunnel for cloud access.
+# Start SPICEBridge MCP server with a named Cloudflare tunnel for cloud access.
+#
+# Permanent URL: https://spicebridge.clanker-lover.work/mcp
 #
 # Usage:
 #   ./start_cloud.sh              # default port 8000
 #   PORT=9000 ./start_cloud.sh    # custom port
-#
-# For a permanent URL, use: cloudflared tunnel create <name>
 set -euo pipefail
 
 PORT="${PORT:-8000}"
@@ -73,26 +73,27 @@ done
 
 # --- Start Cloudflare tunnel ---
 
-echo "Starting Cloudflare tunnel..."
-cloudflared tunnel --url "http://$HOST:$PORT" &
+echo "Starting Cloudflare named tunnel..."
+cloudflared tunnel run spicebridge &
 TUNNEL_PID=$!
 
-# Give tunnel a moment to print its URL
 sleep 3
+
+TUNNEL_URL="https://spicebridge.clanker-lover.work"
 
 echo ""
 echo "========================================="
 echo " SPICEBridge cloud MCP server is running"
 echo "========================================="
 echo ""
-echo "Look above for your tunnel URL (*.trycloudflare.com)."
+echo "Permanent URL: $TUNNEL_URL/mcp"
 echo ""
 echo "MCP client config (add to your client's settings):"
 echo ""
 echo "  {"
 echo "    \"mcpServers\": {"
 echo "      \"spicebridge\": {"
-echo "        \"url\": \"https://<YOUR-TUNNEL-URL>/mcp\""
+echo "        \"url\": \"$TUNNEL_URL/mcp\""
 echo "      }"
 echo "    }"
 echo "  }"
