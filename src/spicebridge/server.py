@@ -62,6 +62,10 @@ _models = ModelStore()
 _ANALYSIS_RE = re.compile(r"^\s*\.(ac|tran|op|dc)\b", re.IGNORECASE)
 _END_RE = re.compile(r"^\s*\.end\s*$", re.IGNORECASE)
 
+# Validation patterns for user-supplied names
+_PORT_NAME_RE = re.compile(r"^[A-Za-z0-9_.$#-]+$")
+_STAGE_LABEL_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
 
 def _prepare_netlist(netlist: str, analysis_line: str) -> str:
     """Strip existing analysis/.end commands and append new ones."""
@@ -305,6 +309,14 @@ def set_ports(circuit_id: str, ports: dict) -> dict:
     except KeyError as e:
         return {"status": "error", "error": str(e)}
 
+    for key, val in ports.items():
+        for label, name in [("port name", key), ("node name", val)]:
+            if not isinstance(name, str) or not _PORT_NAME_RE.match(name):
+                return {
+                    "status": "error",
+                    "error": f"Invalid {label} '{name}': must match [A-Za-z0-9_.$#-]+",
+                }
+
     _manager.set_ports(circuit_id, ports)
     return {"status": "ok", "circuit_id": circuit_id, "ports": ports}
 
@@ -364,17 +376,29 @@ def connect_stages(
                 "error": f"Stage {i} (circuit '{cid}') has no ports",
             }
 
+        label = s.get("label", "")
+        if label and not _STAGE_LABEL_RE.match(label):
+            return {
+                "status": "error",
+                "error": f"Invalid stage label '{label}': must match [A-Za-z0-9_]+",
+            }
+
         resolved.append(
             {
                 "netlist": circuit.netlist,
                 "ports": ports,
-                "label": s.get("label", ""),
+                "label": label,
             }
         )
 
     try:
         result = compose_stages(resolved, connections, shared_ports)
     except (ValueError, KeyError) as e:
+        return {"status": "error", "error": str(e)}
+
+    try:
+        sanitize_netlist(result["netlist"], _allow_includes=True)
+    except ValueError as e:
         return {"status": "error", "error": str(e)}
 
     new_id = _manager.create(result["netlist"])
@@ -446,6 +470,11 @@ def load_template(
             netlist = lines[0] + "\n" + includes + "\n" + lines[1]
         else:
             netlist = netlist + "\n" + includes
+
+    try:
+        sanitize_netlist(netlist, _allow_includes=True)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
 
     circuit_id = _manager.create(netlist)
     # Store ports from template or auto-detect

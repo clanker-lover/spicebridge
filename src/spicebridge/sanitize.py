@@ -12,17 +12,32 @@ from pathlib import Path
 # Maximum netlist size: 1 MB
 MAX_NETLIST_SIZE = 1_000_000
 
-# Dangerous SPICE directives that can execute arbitrary commands
-_DANGEROUS_DIRECTIVES = re.compile(
-    r"^\s*\.\s*(system|exec|shell|control|endc|python|csparam)\b",
-    re.IGNORECASE,
+# Allowlist of safe SPICE dot-directives. Any dot-directive not on this
+# list is stripped/rejected. Maintained as a frozenset for O(1) lookup.
+_ALLOWED_DIRECTIVES = frozenset(
+    {
+        "ac",
+        "tran",
+        "op",
+        "dc",
+        "param",
+        "subckt",
+        "ends",
+        "model",
+        "include",
+        "lib",
+        "global",
+        "end",
+        "ic",
+        "nodeset",
+        "options",
+        "temp",
+        "save",
+    }
 )
 
-# .include and .lib with user-controlled paths (block all user-supplied ones)
-_INCLUDE_DIRECTIVE = re.compile(
-    r"^\s*\.\s*(include|lib)\b",
-    re.IGNORECASE,
-)
+# Extract the directive name from a dot-line (e.g. ".ac" -> "ac")
+_DOT_DIRECTIVE = re.compile(r"^\s*\.(\w+)", re.IGNORECASE)
 
 # Backtick execution
 _BACKTICK = re.compile(r"`")
@@ -52,27 +67,41 @@ def sanitize_netlist(netlist: str, *, _allow_includes: bool = False) -> str:
             f"Netlist too large: {len(netlist)} chars (max {MAX_NETLIST_SIZE})"
         )
 
-    for lineno, line in enumerate(netlist.splitlines(), 1):
+    # Reassemble continuation lines (lines starting with '+') onto the
+    # previous line so that directives split across lines are caught.
+    raw_lines = netlist.splitlines()
+    reassembled: list[str] = []
+    for line in raw_lines:
+        if line.lstrip().startswith("+") and reassembled:
+            reassembled[-1] += " " + line.lstrip()[1:]
+        else:
+            reassembled.append(line)
+
+    for lineno, line in enumerate(reassembled, 1):
         stripped = line.strip()
         if not stripped or stripped.startswith("*"):
             continue
 
-        if _DANGEROUS_DIRECTIVES.match(stripped):
-            directive = stripped.split()[0]
-            raise ValueError(
-                f"Dangerous SPICE directive '{directive}' "
-                f"on line {lineno} is not allowed"
-            )
-
-        if not _allow_includes and _INCLUDE_DIRECTIVE.match(stripped):
-            directive = stripped.split()[0]
-            raise ValueError(
-                f"Directive '{directive}' on line {lineno} is not allowed "
-                f"in user-supplied netlists. Use the 'models' parameter instead."
-            )
-
         if _BACKTICK.search(stripped):
             raise ValueError(f"Backtick execution on line {lineno} is not allowed")
+
+        m = _DOT_DIRECTIVE.match(stripped)
+        if m:
+            directive_name = m.group(1).lower()
+
+            if directive_name in ("include", "lib") and not _allow_includes:
+                directive = stripped.split()[0]
+                raise ValueError(
+                    f"Directive '{directive}' on line {lineno} is not allowed "
+                    f"in user-supplied netlists. Use the 'models' parameter instead."
+                )
+
+            if directive_name not in _ALLOWED_DIRECTIVES:
+                directive = stripped.split()[0]
+                raise ValueError(
+                    f"Disallowed SPICE directive '{directive}' "
+                    f"on line {lineno} is not allowed"
+                )
 
     return netlist
 

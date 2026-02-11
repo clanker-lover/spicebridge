@@ -55,7 +55,7 @@ C1 out 0 1u
     )
     def test_dangerous_directives_rejected(self, directive):
         netlist = f"Test\n{directive}\n.end\n"
-        with pytest.raises(ValueError, match="[Dd]angerous"):
+        with pytest.raises(ValueError, match="not allowed"):
             sanitize_netlist(netlist)
 
     def test_include_rejected_by_default(self):
@@ -101,6 +101,63 @@ C1 out 0 1u
             ".end\n"
         )
         assert sanitize_netlist(netlist) == netlist
+
+    def test_control_block_rejected(self):
+        netlist = "Test\n.control\nshell echo PWNED\n.endc\n.end\n"
+        with pytest.raises(ValueError, match="not allowed"):
+            sanitize_netlist(netlist)
+
+    def test_script_block_rejected(self):
+        netlist = "Test\n.script\nprint('hi')\n.endscript\n.end\n"
+        with pytest.raises(ValueError, match="not allowed"):
+            sanitize_netlist(netlist)
+
+    def test_rawfile_rejected(self):
+        netlist = "Test\n.rawfile /tmp/out.raw\n.end\n"
+        with pytest.raises(ValueError, match="not allowed"):
+            sanitize_netlist(netlist)
+
+    def test_shell_rejected(self):
+        netlist = "Test\n.shell echo pwned\n.end\n"
+        with pytest.raises(ValueError, match="not allowed"):
+            sanitize_netlist(netlist)
+
+    def test_all_allowlisted_directives_pass(self):
+        """Every directive in the allowlist should pass validation."""
+        lines = [
+            "Test Circuit",
+            ".ac dec 10 1 1meg",
+            ".tran 1u 10m",
+            ".op",
+            ".dc V1 0 5 0.1",
+            ".param R1=1k",
+            ".subckt myblock 1 2",
+            ".ends myblock",
+            ".model NPN NPN",
+            ".global gnd",
+            ".ic V(out)=0",
+            ".nodeset V(out)=2.5",
+            ".options reltol=0.001",
+            ".temp 27",
+            ".save all",
+            ".end",
+        ]
+        netlist = "\n".join(lines) + "\n"
+        # .include and .lib require _allow_includes=True
+        assert sanitize_netlist(netlist) == netlist
+        inc_netlist = "Test\n.include /models/test.lib\n.lib /models/lib2\n.end\n"
+        assert sanitize_netlist(inc_netlist, _allow_includes=True) == inc_netlist
+
+    def test_continuation_line_reassembly_catches_split(self):
+        """A directive split across continuation lines must be caught."""
+        netlist = "Test\n.con\n+trol\n.end\n"
+        with pytest.raises(ValueError, match="not allowed"):
+            sanitize_netlist(netlist)
+
+    def test_unknown_directive_rejected(self):
+        netlist = "Test\n.foobar something\n.end\n"
+        with pytest.raises(ValueError, match="not allowed"):
+            sanitize_netlist(netlist)
 
 
 # ---------------------------------------------------------------------------

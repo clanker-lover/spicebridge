@@ -17,11 +17,13 @@ import pytest
 
 from spicebridge.circuit_manager import CircuitManager
 from spicebridge.server import (
+    connect_stages,
     create_circuit,
     draw_schematic,
     export_kicad,
     modify_component,
     run_monte_carlo,
+    set_ports,
 )
 from spicebridge.simulator import validate_netlist_syntax
 from spicebridge.web_viewer import _ViewerServer
@@ -178,8 +180,8 @@ class TestNetlistInjectionEndToEnd:
     @pytest.mark.parametrize(
         ("netlist", "match"),
         [
-            (_SYSTEM_DIRECTIVE_NETLIST, "Dangerous"),
-            (_CONTROL_BLOCK_NETLIST, "Dangerous"),
+            (_SYSTEM_DIRECTIVE_NETLIST, "not allowed"),
+            (_CONTROL_BLOCK_NETLIST, "not allowed"),
             (_INCLUDE_SENSITIVE_NETLIST, "not allowed"),
             (_BACKTICK_NETLIST, "Backtick"),
         ],
@@ -379,3 +381,75 @@ class TestCircuitIdSafety:
     def test_nonexistent_id_returns_error(self):
         result = run_monte_carlo("deadbeef", analysis_type="ac", num_runs=10)
         assert result["status"] == "error"
+
+
+# ===========================================================================
+# Class 8: set_ports Validation
+# ===========================================================================
+
+
+class TestSetPortsValidation:
+    """Verify set_ports rejects adversarial port/node names."""
+
+    def test_rejects_port_name_with_newline(self):
+        setup = create_circuit(_CLEAN_NETLIST)
+        cid = setup["circuit_id"]
+        result = set_ports(cid, {"in\n.system pwned": "node1"})
+        assert result["status"] == "error"
+        assert "Invalid port name" in result["error"]
+
+    def test_rejects_port_name_with_spaces(self):
+        setup = create_circuit(_CLEAN_NETLIST)
+        cid = setup["circuit_id"]
+        result = set_ports(cid, {"port name": "node1"})
+        assert result["status"] == "error"
+        assert "Invalid port name" in result["error"]
+
+    def test_rejects_node_name_with_newline(self):
+        setup = create_circuit(_CLEAN_NETLIST)
+        cid = setup["circuit_id"]
+        result = set_ports(cid, {"in": "node\n.shell cmd"})
+        assert result["status"] == "error"
+        assert "Invalid node name" in result["error"]
+
+    def test_accepts_valid_spice_names(self):
+        setup = create_circuit(_CLEAN_NETLIST)
+        cid = setup["circuit_id"]
+        result = set_ports(cid, {"input": "in", "out_1": "out", "VCC": "vdd"})
+        assert result["status"] == "ok"
+
+
+# ===========================================================================
+# Class 9: connect_stages Validation
+# ===========================================================================
+
+
+class TestConnectStagesValidation:
+    """Verify connect_stages rejects adversarial stage labels."""
+
+    def test_rejects_label_with_newline(self):
+        setup = create_circuit(_CLEAN_NETLIST)
+        cid = setup["circuit_id"]
+        set_ports(cid, {"in": "in", "out": "out", "gnd": "0"})
+        result = connect_stages([{"circuit_id": cid, "label": "stage\n.system pwned"}])
+        assert result["status"] == "error"
+        assert "Invalid stage label" in result["error"]
+
+    def test_rejects_label_with_special_chars(self):
+        setup = create_circuit(_CLEAN_NETLIST)
+        cid = setup["circuit_id"]
+        set_ports(cid, {"in": "in", "out": "out", "gnd": "0"})
+        result = connect_stages([{"circuit_id": cid, "label": "stage;pwned"}])
+        assert result["status"] == "error"
+        assert "Invalid stage label" in result["error"]
+
+    def test_accepts_clean_labels(self):
+        setup = create_circuit(_CLEAN_NETLIST)
+        cid = setup["circuit_id"]
+        set_ports(cid, {"in": "in", "out": "out", "gnd": "0"})
+        # Labels like "preamp", "S1", "output_stage" should not trigger
+        # a label validation error (may fail for other reasons)
+        for label in ["preamp", "S1", "output_stage"]:
+            result = connect_stages([{"circuit_id": cid, "label": label}])
+            if result["status"] == "error":
+                assert "Invalid stage label" not in result["error"]
