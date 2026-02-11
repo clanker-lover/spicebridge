@@ -628,5 +628,14 @@ def calculate_components(topology_id: str, specs: dict) -> dict:
     return {"status": "ok", **result}
 
 
+def configure_for_remote() -> None:
+    """Disable DNS rebinding protection for tunnel/remote access."""
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=False
+    )
+
+
 if __name__ == "__main__":
     mcp.run()

@@ -16,6 +16,9 @@ dependencies = [
     "matplotlib",
 ]
 
+[project.scripts]
+spicebridge = "spicebridge.__main__:main"
+
 [project.optional-dependencies]
 dev = [
     "ruff",
