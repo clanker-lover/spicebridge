@@ -10,23 +10,7 @@ from __future__ import annotations
 import re
 import warnings
 
-# Number of nodes per SPICE component letter
-_COMP_NODE_COUNTS: dict[str, int] = {
-    "R": 2,
-    "C": 2,
-    "L": 2,
-    "V": 2,
-    "I": 2,
-    "D": 2,
-    "Q": 3,
-    "J": 3,
-    "M": 4,
-    "E": 4,
-    "G": 4,
-    "F": 2,
-    "H": 2,
-    "B": 2,
-}
+from spicebridge.constants import ANALYSIS_RE, COMPONENT_NODE_COUNTS, END_RE
 
 # Heuristic mappings for auto-detecting port roles
 _PORT_HEURISTICS: dict[str, str] = {
@@ -47,8 +31,6 @@ _PORT_HEURISTICS: dict[str, str] = {
     "gnd": "ground",
 }
 
-_ANALYSIS_DIR_RE = re.compile(r"^\s*\.(ac|tran|op|dc)\b", re.IGNORECASE)
-_END_RE = re.compile(r"^\s*\.end\s*$", re.IGNORECASE)
 _SUBCKT_RE = re.compile(r"^\s*\.subckt\b", re.IGNORECASE)
 _ENDS_RE = re.compile(r"^\s*\.ends\b", re.IGNORECASE)
 _PARAM_RE = re.compile(r"^\s*\.param\s+(\w+)\s*=\s*(\S+)", re.IGNORECASE)
@@ -86,8 +68,8 @@ def _extract_nodes_from_line(stripped: str, letter: str, tokens: list[str]) -> s
         if len(tokens) >= 3:
             for tok in tokens[1:-1]:
                 nodes.add(tok)
-    elif letter in _COMP_NODE_COUNTS:
-        n_nodes = _COMP_NODE_COUNTS[letter]
+    elif letter in COMPONENT_NODE_COUNTS:
+        n_nodes = COMPONENT_NODE_COUNTS[letter]
         for tok in tokens[1 : 1 + n_nodes]:
             nodes.add(tok)
     return nodes
@@ -198,8 +180,8 @@ def _prefix_component_line(
                 new_nodes.append(f"{prefix}_{n}")
         return f"{new_ref} {' '.join(new_nodes)} {model_name}"
 
-    if letter in _COMP_NODE_COUNTS:
-        n_nodes = _COMP_NODE_COUNTS[letter]
+    if letter in COMPONENT_NODE_COUNTS:
+        n_nodes = COMPONENT_NODE_COUNTS[letter]
 
         # Check for source stripping
         if letter in ("V", "I") and len(tokens) >= 2:
@@ -308,9 +290,9 @@ def prefix_netlist(
             continue
 
         # Strip analysis directives
-        if _ANALYSIS_DIR_RE.match(stripped):
+        if ANALYSIS_RE.match(stripped):
             continue
-        if _END_RE.match(stripped):
+        if END_RE.match(stripped):
             continue
 
         # .param lines — prefix the key

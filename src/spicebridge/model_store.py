@@ -7,6 +7,7 @@ in ``~/.spicebridge/models/`` (configurable for testing).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from spicebridge.model_generator import GeneratedModel, _validate_name
@@ -45,7 +46,9 @@ class ModelStore:
 
     def _flush_index(self) -> None:
         self._ensure_dir()
-        self._index_path.write_text(json.dumps(self._index, indent=2) + "\n")
+        tmp = self._index_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self._index, indent=2) + "\n")
+        os.replace(tmp, self._index_path)
 
     # -- public API ---------------------------------------------------------
 

@@ -185,6 +185,21 @@ class TestDirectoryCreation:
         assert nested.is_dir()
 
 
+class TestAtomicFlush:
+    def test_flush_index_produces_valid_json(self, tmp_path):
+        store = ModelStore(base_dir=tmp_path)
+        store.save(generate_model("diode", "DTest"))
+        index_path = tmp_path / "index.json"
+        data = json.loads(index_path.read_text())
+        assert "DTest" in data
+
+    def test_no_lingering_tmp_file(self, tmp_path):
+        store = ModelStore(base_dir=tmp_path)
+        store.save(generate_model("diode", "DTest"))
+        tmp_files = list(tmp_path.glob("*.tmp"))
+        assert tmp_files == []
+
+
 # ---------------------------------------------------------------------------
 # Integration tests (require ngspice)
 # ---------------------------------------------------------------------------

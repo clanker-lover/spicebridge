@@ -12,15 +12,12 @@ from pathlib import Path
 
 import numpy as np
 
+from spicebridge.netlist_utils import prepare_netlist
 from spicebridge.parser import parse_results
 from spicebridge.simulator import run_simulation
 from spicebridge.standard_values import format_engineering, parse_spice_value
 
 logger = logging.getLogger(__name__)
-
-# Patterns for analysis commands to strip (same as server.py)
-_ANALYSIS_RE = re.compile(r"^\s*\.(ac|tran|op|dc)\b", re.IGNORECASE)
-_END_RE = re.compile(r"^\s*\.end\s*$", re.IGNORECASE)
 
 # Instance line: R1 node1 node2 <value> [optional stuff like IC=0]
 _INSTANCE_RE = re.compile(r"^\s*([RCL]\w+)\s+\S+\s+\S+\s+(\S+)", re.IGNORECASE)
@@ -256,17 +253,7 @@ def run_single_sim(netlist: str, analysis_cmd: str) -> dict | None:
     """
     with tempfile.TemporaryDirectory(prefix="spicebridge_mc_") as tmpdir:
         tmpdir_path = Path(tmpdir)
-        # Strip old analysis/.end, append new ones
-        lines = []
-        for line in netlist.splitlines():
-            if _ANALYSIS_RE.match(line):
-                continue
-            if _END_RE.match(line):
-                continue
-            lines.append(line)
-        lines.append(analysis_cmd)
-        lines.append(".end")
-        prepared = "\n".join(lines) + "\n"
+        prepared = prepare_netlist(netlist, analysis_cmd)
 
         try:
             success = run_simulation(prepared, output_dir=tmpdir_path)
@@ -282,6 +269,18 @@ def run_single_sim(netlist: str, analysis_cmd: str) -> dict | None:
         except (RuntimeError, OSError, ValueError) as exc:
             logger.debug("Monte Carlo sim failed: %s", exc)
             return None
+
+
+def _flatten(d: dict, prefix: str = "") -> dict[str, float]:
+    """Flatten a nested dict of numeric values into dotted-key form."""
+    flat: dict[str, float] = {}
+    for key, val in d.items():
+        full_key = f"{prefix}{key}" if not prefix else f"{prefix}.{key}"
+        if isinstance(val, dict):
+            flat.update(_flatten(val, full_key))
+        elif isinstance(val, (int, float)) and not isinstance(val, bool):
+            flat[full_key] = float(val)
+    return flat
 
 
 def compute_worst_case(
@@ -302,17 +301,6 @@ def compute_worst_case(
             sign = "+" if direction > 0 else "-"
             parts.append(f"{comp.ref}{sign}{tol}%")
         return ", ".join(parts)
-
-    # Flatten nominal results
-    def _flatten(d: dict, prefix: str = "") -> dict[str, float]:
-        flat: dict[str, float] = {}
-        for key, val in d.items():
-            full_key = f"{prefix}{key}" if not prefix else f"{prefix}.{key}"
-            if isinstance(val, dict):
-                flat.update(_flatten(val, full_key))
-            elif isinstance(val, (int, float)) and not isinstance(val, bool):
-                flat[full_key] = float(val)
-        return flat
 
     nom_flat = _flatten(nominal)
     worst: dict[str, dict] = {}
@@ -359,17 +347,6 @@ def compute_sensitivity(
     sensitivity_runs: list of (ref, direction, result_dict) tuples.
     Returns dict keyed by metric, containing sorted component sensitivities.
     """
-
-    def _flatten(d: dict, prefix: str = "") -> dict[str, float]:
-        flat: dict[str, float] = {}
-        for key, val in d.items():
-            full_key = f"{prefix}{key}" if not prefix else f"{prefix}.{key}"
-            if isinstance(val, dict):
-                flat.update(_flatten(val, full_key))
-            elif isinstance(val, (int, float)) and not isinstance(val, bool):
-                flat[full_key] = float(val)
-        return flat
-
     nom_flat = _flatten(nominal)
 
     # Collect per-component, per-direction results

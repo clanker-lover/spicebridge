@@ -1,6 +1,7 @@
 """Tests for spicebridge.circuit_manager — unit tests, no simulations."""
 
 import re
+import threading
 
 import pytest
 
@@ -57,3 +58,25 @@ def test_update_results():
     results = {"analysis_type": "AC Analysis", "f_3dB_hz": 1592.0}
     mgr.update_results(cid, results)
     assert mgr.get(cid).last_results == results
+
+
+def test_has_lock_attribute():
+    """CircuitManager should have a threading.Lock instance."""
+    mgr = CircuitManager()
+    assert isinstance(mgr._lock, type(threading.Lock()))
+
+
+def test_concurrent_creates():
+    """Concurrent create() calls should all succeed without data loss."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    mgr = CircuitManager()
+
+    def _create(i: int) -> str:
+        return mgr.create(f"* circuit {i}\n.end\n")
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        ids = list(pool.map(_create, range(20)))
+
+    assert len(set(ids)) == 20
+    assert len(mgr.list_all()) == 20

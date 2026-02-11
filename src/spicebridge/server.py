@@ -26,6 +26,7 @@ from spicebridge.monte_carlo import (
     run_single_sim,
     substitute_values,
 )
+from spicebridge.netlist_utils import prepare_netlist as _prepare_netlist
 from spicebridge.parser import (
     parse_results,
     read_ac_at_frequency,
@@ -69,10 +70,6 @@ if not shutil.which("ngspice"):
         "Install with: sudo apt install ngspice"
     )
 
-# Patterns for analysis commands to strip (case-insensitive)
-_ANALYSIS_RE = re.compile(r"^\s*\.(ac|tran|op|dc)\b", re.IGNORECASE)
-_END_RE = re.compile(r"^\s*\.end\s*$", re.IGNORECASE)
-
 # Validation patterns for user-supplied names
 _PORT_NAME_RE = re.compile(r"^[A-Za-z0-9_.$#-]+$")
 _STAGE_LABEL_RE = re.compile(r"^[A-Za-z0-9_]+$")
@@ -84,20 +81,6 @@ _MAX_MONTE_CARLO_RUNS = 100
 _MONTE_CARLO_TIMEOUT = 30 * 60  # 30 minutes
 _MAX_WORST_CASE_COMPONENTS = 20
 _MAX_WORST_CASE_SIMS = 500
-
-
-def _prepare_netlist(netlist: str, analysis_line: str) -> str:
-    """Strip existing analysis/.end commands and append new ones."""
-    lines = []
-    for line in netlist.splitlines():
-        if _ANALYSIS_RE.match(line):
-            continue
-        if _END_RE.match(line):
-            continue
-        lines.append(line)
-    lines.append(analysis_line)
-    lines.append(".end")
-    return "\n".join(lines) + "\n"
 
 
 def _resolve_model_includes(model_names: list[str]) -> str:

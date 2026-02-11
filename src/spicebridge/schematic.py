@@ -9,6 +9,8 @@ from pathlib import Path
 import schemdraw
 import schemdraw.elements as elm
 
+from spicebridge.constants import COMPONENT_NODE_COUNTS
+
 
 @dataclass
 class ParsedComponent:
@@ -19,18 +21,6 @@ class ParsedComponent:
     nodes: list[str] = field(default_factory=list)
     value: str = ""  # Value/model string, e.g. "1k", "AC 1"
 
-
-# Node counts per component type
-_NODE_COUNTS: dict[str, int] = {
-    "R": 2,
-    "C": 2,
-    "L": 2,
-    "V": 2,
-    "I": 2,
-    "D": 2,
-    "Q": 3,
-    "M": 4,
-}
 
 # Ground node aliases (lowercase)
 _GROUND_NAMES = {"0", "gnd", "gnd!"}
@@ -74,8 +64,8 @@ def parse_netlist(netlist: str) -> list[ParsedComponent]:
             else:
                 nodes = []
                 value = ""
-        elif comp_type in _NODE_COUNTS:
-            n_nodes = _NODE_COUNTS[comp_type]
+        elif comp_type in COMPONENT_NODE_COUNTS:
+            n_nodes = COMPONENT_NODE_COUNTS[comp_type]
             nodes = [n.lower() for n in tokens[1 : 1 + n_nodes]]
             value = " ".join(tokens[1 + n_nodes :])
         else:

@@ -6,6 +6,7 @@ import atexit
 import logging
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -33,69 +34,89 @@ class CircuitManager:
 
     def __init__(self) -> None:
         self._circuits: dict[str, CircuitState] = {}
+        self._lock = threading.Lock()
         atexit.register(self.cleanup_all)
 
-    def create(self, netlist: str) -> str:
-        """Create a new circuit and return its ID."""
-        if len(self._circuits) >= _MAX_CIRCUITS:
-            oldest_id = next(iter(self._circuits))
-            logger.warning(
-                "Circuit limit reached (%d); evicting circuit '%s'",
-                _MAX_CIRCUITS,
-                oldest_id,
-            )
-            self.delete(oldest_id)
+    def _get_unlocked(self, circuit_id: str) -> CircuitState:
+        """Get circuit state by ID without acquiring the lock.
 
-        circuit_id = uuid.uuid4().hex
-        output_dir = Path(tempfile.mkdtemp(prefix=f"spicebridge_{circuit_id}_"))
-        self._circuits[circuit_id] = CircuitState(
-            circuit_id=circuit_id,
-            netlist=netlist,
-            output_dir=output_dir,
-        )
-        return circuit_id
-
-    def get(self, circuit_id: str) -> CircuitState:
-        """Get circuit state by ID. Raises KeyError if not found."""
+        Must only be called while self._lock is held.
+        """
         if circuit_id not in self._circuits:
             raise KeyError(f"Circuit '{circuit_id}' not found")
         return self._circuits[circuit_id]
 
+    def create(self, netlist: str) -> str:
+        """Create a new circuit and return its ID."""
+        evict_state = None
+        circuit_id = uuid.uuid4().hex
+        output_dir = Path(tempfile.mkdtemp(prefix=f"spicebridge_{circuit_id}_"))
+        with self._lock:
+            if len(self._circuits) >= _MAX_CIRCUITS:
+                oldest_id = next(iter(self._circuits))
+                logger.warning(
+                    "Circuit limit reached (%d); evicting circuit '%s'",
+                    _MAX_CIRCUITS,
+                    oldest_id,
+                )
+                evict_state = self._circuits.pop(oldest_id)
+            self._circuits[circuit_id] = CircuitState(
+                circuit_id=circuit_id,
+                netlist=netlist,
+                output_dir=output_dir,
+            )
+        if evict_state is not None:
+            shutil.rmtree(evict_state.output_dir, ignore_errors=True)
+        return circuit_id
+
+    def get(self, circuit_id: str) -> CircuitState:
+        """Get circuit state by ID. Raises KeyError if not found."""
+        with self._lock:
+            return self._get_unlocked(circuit_id)
+
     def update_results(self, circuit_id: str, results: dict) -> None:
         """Store simulation results for a circuit."""
-        self.get(circuit_id).last_results = results
+        with self._lock:
+            self._get_unlocked(circuit_id).last_results = results
 
     def update_netlist(self, circuit_id: str, netlist: str) -> None:
         """Replace the stored netlist for a circuit."""
-        self.get(circuit_id).netlist = netlist
+        with self._lock:
+            self._get_unlocked(circuit_id).netlist = netlist
 
     def set_ports(self, circuit_id: str, ports: dict[str, str]) -> None:
         """Store port definitions for a circuit."""
-        self.get(circuit_id).ports = ports
+        with self._lock:
+            self._get_unlocked(circuit_id).ports = ports
 
     def get_ports(self, circuit_id: str) -> dict[str, str] | None:
         """Return port definitions for a circuit, or None if not set."""
-        return self.get(circuit_id).ports
+        with self._lock:
+            return self._get_unlocked(circuit_id).ports
 
     def list_all(self) -> list[dict]:
         """Return summary info for all stored circuits."""
-        return [
-            {
-                "circuit_id": cid,
-                "has_results": state.last_results is not None,
-            }
-            for cid, state in self._circuits.items()
-        ]
+        with self._lock:
+            return [
+                {
+                    "circuit_id": cid,
+                    "has_results": state.last_results is not None,
+                }
+                for cid, state in self._circuits.items()
+            ]
 
     def delete(self, circuit_id: str) -> None:
         """Remove a circuit and clean up its output directory."""
-        state = self._circuits.pop(circuit_id, None)
+        with self._lock:
+            state = self._circuits.pop(circuit_id, None)
         if state is None:
             raise KeyError(f"Circuit '{circuit_id}' not found")
         shutil.rmtree(state.output_dir, ignore_errors=True)
 
     def cleanup_all(self) -> None:
         """Remove all circuits and clean up all output directories."""
-        for state in self._circuits.values():
+        with self._lock:
+            states = list(self._circuits.values())
+            self._circuits.clear()
+        for state in states:
             shutil.rmtree(state.output_dir, ignore_errors=True)
-        self._circuits.clear()
