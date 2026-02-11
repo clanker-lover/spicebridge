@@ -80,7 +80,7 @@ def test_list_all_templates():
 def test_list_filter_by_category():
     mgr = TemplateManager()
     filters = mgr.list_templates(category="filters")
-    assert len(filters) == 3
+    assert len(filters) == 6
     assert all(t["category"] == "filters" for t in filters)
 
 

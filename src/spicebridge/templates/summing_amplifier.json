@@ -1,0 +1,17 @@
+{
+  "id": "summing_amplifier",
+  "name": "Summing Amplifier",
+  "category": "amplifiers",
+  "description": "Inverting summing amplifier with three inputs. Output is the inverted weighted sum of all inputs, with gain set by the ratio of feedback resistor to input resistors.",
+  "design_equations": [
+    "V_out = -Rf * (V1/R1 + V2/R2 + V3/R3)",
+    "Equal-weight: R1 = R2 = R3 = Rin, gain per input = Rf / Rin"
+  ],
+  "netlist": "* Summing Amplifier\n.param R1=10k\n.param R2=10k\n.param R3=10k\n.param Rf=10k\n.subckt ideal_opamp inp inn out\nE1 out 0 inp inn 100k\n.ends ideal_opamp\nV1 in1 0 dc 0 ac 1\nV2 in2 0 dc 0\nV3 in3 0 dc 0\nR1 in1 vminus {R1}\nR2 in2 vminus {R2}\nR3 in3 vminus {R3}\nRf vminus out {Rf}\nX1 0 vminus out ideal_opamp",
+  "components": {
+    "R1": {"description": "Input 1 resistor", "default": "10k"},
+    "R2": {"description": "Input 2 resistor", "default": "10k"},
+    "R3": {"description": "Input 3 resistor", "default": "10k"},
+    "Rf": {"description": "Feedback resistor", "default": "10k"}
+  }
+}

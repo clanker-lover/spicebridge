@@ -1,0 +1,19 @@
+{
+  "id": "mfb_bandpass",
+  "name": "Multiple Feedback Bandpass Filter",
+  "category": "filters",
+  "description": "Active second-order bandpass filter using the multiple feedback (MFB) topology. Center frequency, Q, and gain are independently adjustable via resistor values.",
+  "design_equations": [
+    "f0 = (1 / (2 * pi * C)) * sqrt((R1 + R3) / (R1 * R2 * R3))",
+    "Q = pi * f0 * C * R3",
+    "Gain = R3 / (2 * R1)"
+  ],
+  "netlist": "* Multiple Feedback Bandpass Filter\n.param R1=10k\n.param R2=10k\n.param R3=10k\n.param C1=10n\n.param C2=10n\n.subckt ideal_opamp inp inn out\nE1 out 0 inp inn 100k\n.ends ideal_opamp\nV1 in 0 dc 0 ac 1\nR1 in n1 {R1}\nR3 out n1 {R3}\nC1 n1 n2 {C1}\nR2 n2 0 {R2}\nC2 out n2 {C2}\nX1 0 n2 out ideal_opamp",
+  "components": {
+    "R1": {"description": "Input resistor", "default": "10k"},
+    "R2": {"description": "Ground resistor (sets Q)", "default": "10k"},
+    "R3": {"description": "Feedback resistor", "default": "10k"},
+    "C1": {"description": "Series capacitor", "default": "10n"},
+    "C2": {"description": "Feedback capacitor", "default": "10n"}
+  }
+}

@@ -276,6 +276,255 @@ class TestVoltageDivider:
 
 
 # ===========================================================================
+# solver: MFB Bandpass
+# ===========================================================================
+
+
+class TestMFBBandpass:
+    def test_1khz_default(self):
+        result = solve("mfb_bandpass", {"f_center_hz": 1000})
+        c = result["components"]
+        assert "R1" in c
+        assert "R2" in c
+        assert "R3" in c
+        assert "C1" in c
+        assert "C2" in c
+
+    def test_roundtrip_f_center(self):
+        """Verify f0 = Q / (pi * C * R3) from R3 = 2*Q/(2*pi*f0*C)."""
+        result = solve("mfb_bandpass", {"f_center_hz": 1000})
+        r1, r2, r3, c1, c2 = _parse_mfb(result)
+        c = c1  # equal-C
+        q = 1.0  # default Q
+        f_calc = q / (math.pi * c * r3)
+        assert f_calc == pytest.approx(1000, rel=0.01)
+
+    def test_custom_q(self):
+        result = solve("mfb_bandpass", {"f_center_hz": 1000, "Q": 5.0})
+        r1, r2, r3, c1, c2 = _parse_mfb(result)
+        q_calc = math.pi * 1000 * c1 * r3
+        assert q_calc == pytest.approx(5.0, rel=0.01)
+
+    def test_custom_gain(self):
+        result = solve("mfb_bandpass", {"f_center_hz": 1000, "gain_linear": 2.0})
+        r1, r2, r3, c1, c2 = _parse_mfb(result)
+        gain_calc = r3 / (2.0 * r1)
+        assert gain_calc == pytest.approx(2.0, rel=0.01)
+
+    def test_equal_c(self):
+        result = solve("mfb_bandpass", {"f_center_hz": 1000})
+        c = result["components"]
+        assert c["C1"] == c["C2"]
+
+    def test_missing_spec(self):
+        with pytest.raises(ValueError, match="requires"):
+            solve("mfb_bandpass", {})
+
+    def test_negative_freq(self):
+        with pytest.raises(ValueError, match="positive"):
+            solve("mfb_bandpass", {"f_center_hz": -100})
+
+
+# ===========================================================================
+# solver: Sallen-Key HPF 2nd order
+# ===========================================================================
+
+
+class TestSallenKeyHPF2nd:
+    def test_butterworth_1khz(self):
+        result = solve("sallen_key_hpf_2nd", {"f_cutoff_hz": 1000})
+        c = result["components"]
+        assert c["R1"] == c["R2"]
+
+    def test_equal_r(self):
+        result = solve("sallen_key_hpf_2nd", {"f_cutoff_hz": 1000})
+        c = result["components"]
+        assert c["R1"] == c["R2"]
+
+    def test_c_ratio(self):
+        """For Butterworth Q=0.707: C1 ~ 2*C2."""
+        result = solve("sallen_key_hpf_2nd", {"f_cutoff_hz": 1000})
+        c1, c2 = _parse_hpf_caps(result)
+        assert c1 / c2 == pytest.approx(2.0, rel=0.01)
+
+    def test_cutoff_equation(self):
+        """Verify f_c = 1/(2*pi*sqrt(R1*R2*C1*C2))."""
+        result = solve("sallen_key_hpf_2nd", {"f_cutoff_hz": 1000})
+        r1, r2, c1, c2 = _parse_sallen_all(result)
+        f_calc = 1.0 / (2 * math.pi * math.sqrt(r1 * r2 * c1 * c2))
+        assert f_calc == pytest.approx(1000, rel=0.01)
+
+    def test_custom_q(self):
+        result = solve("sallen_key_hpf_2nd", {"f_cutoff_hz": 1000, "Q": 1.0})
+        c1, c2 = _parse_hpf_caps(result)
+        assert c1 / c2 == pytest.approx(4.0, rel=0.01)
+
+    def test_missing_spec(self):
+        with pytest.raises(ValueError, match="requires"):
+            solve("sallen_key_hpf_2nd", {})
+
+
+# ===========================================================================
+# solver: Summing Amplifier
+# ===========================================================================
+
+
+class TestSummingAmplifier:
+    def test_default_3_input(self):
+        result = solve("summing_amplifier", {})
+        c = result["components"]
+        assert "R1" in c
+        assert "R2" in c
+        assert "R3" in c
+        assert "Rf" in c
+        assert "R4" not in c
+
+    def test_2_inputs(self):
+        result = solve("summing_amplifier", {"num_inputs": 2})
+        c = result["components"]
+        assert "R1" in c
+        assert "R2" in c
+        assert "R3" not in c
+
+    def test_6_inputs(self):
+        result = solve("summing_amplifier", {"num_inputs": 6})
+        c = result["components"]
+        for i in range(1, 7):
+            assert f"R{i}" in c
+        assert "R7" not in c
+
+    def test_custom_gain(self):
+        result = solve("summing_amplifier", {"gain_per_input": 5.0})
+        c = result["components"]
+        rf = _parse_eng(c["Rf"])
+        r1 = _parse_eng(c["R1"])
+        assert rf / r1 == pytest.approx(5.0, rel=0.01)
+
+    def test_custom_impedance(self):
+        result = solve(
+            "summing_amplifier", {"input_impedance_ohms": 20e3, "gain_per_input": 2.0}
+        )
+        c = result["components"]
+        assert c["R1"] == "20k"
+        assert c["Rf"] == "40k"
+
+    def test_inputs_out_of_range(self):
+        with pytest.raises(ValueError, match="between 2 and 6"):
+            solve("summing_amplifier", {"num_inputs": 7})
+        with pytest.raises(ValueError, match="between 2 and 6"):
+            solve("summing_amplifier", {"num_inputs": 1})
+
+
+# ===========================================================================
+# solver: Differential Amplifier
+# ===========================================================================
+
+
+class TestDifferentialAmp:
+    def test_default_unity(self):
+        result = solve("differential_amp", {})
+        c = result["components"]
+        assert c["R1"] == c["R2"]
+        assert c["R3"] == c["R4"]
+        assert c["R1"] == c["R3"]
+
+    def test_gain_10(self):
+        result = solve("differential_amp", {"gain_linear": 10.0})
+        c = result["components"]
+        r1 = _parse_eng(c["R1"])
+        r2 = _parse_eng(c["R2"])
+        assert r2 / r1 == pytest.approx(10.0, rel=0.01)
+
+    def test_custom_impedance(self):
+        result = solve(
+            "differential_amp", {"input_impedance_ohms": 5e3, "gain_linear": 2.0}
+        )
+        c = result["components"]
+        assert c["R1"] == "5k"
+        assert c["R2"] == "10k"
+
+    def test_matched_ratios(self):
+        result = solve("differential_amp", {"gain_linear": 3.0})
+        c = result["components"]
+        r1 = _parse_eng(c["R1"])
+        r2 = _parse_eng(c["R2"])
+        r3 = _parse_eng(c["R3"])
+        r4 = _parse_eng(c["R4"])
+        assert r2 / r1 == pytest.approx(r4 / r3, rel=0.01)
+
+
+# ===========================================================================
+# solver: Instrumentation Amplifier
+# ===========================================================================
+
+
+class TestInstrumentationAmp:
+    def test_gain_10(self):
+        result = solve("instrumentation_amp", {"gain_linear": 10.0})
+        c = result["components"]
+        assert "Rg" in c
+        assert c["Rg"] != "open"
+
+    def test_unity_gain(self):
+        result = solve("instrumentation_amp", {"gain_linear": 1.0})
+        c = result["components"]
+        assert c["Rg"] == "open"
+
+    def test_rg_calculation(self):
+        """Rg = 2*R1 / (gain - 1)."""
+        result = solve("instrumentation_amp", {"gain_linear": 10.0})
+        c = result["components"]
+        r1 = _parse_eng(c["R1"])
+        rg = _parse_eng(c["Rg"])
+        expected_rg = 2.0 * r1 / (10.0 - 1)
+        assert rg == pytest.approx(expected_rg, rel=0.01)
+
+    def test_missing_spec(self):
+        with pytest.raises(ValueError, match="requires"):
+            solve("instrumentation_amp", {})
+
+    def test_gain_below_1(self):
+        with pytest.raises(ValueError, match=">= 1"):
+            solve("instrumentation_amp", {"gain_linear": 0.5})
+
+
+# ===========================================================================
+# solver: Twin-T Notch
+# ===========================================================================
+
+
+class TestTwinTNotch:
+    def test_1khz(self):
+        result = solve("twin_t_notch", {"f_notch_hz": 1000})
+        c = result["components"]
+        assert "R" in c
+        assert "R_half" in c
+        assert "C" in c
+        assert "C_dbl" in c
+
+    def test_roundtrip_f_notch(self):
+        """Verify f = 1/(2*pi*R*C)."""
+        result = solve("twin_t_notch", {"f_notch_hz": 1000})
+        r, r_half, c, c_dbl = _parse_twin_t(result)
+        f_calc = 1.0 / (2.0 * math.pi * r * c)
+        assert f_calc == pytest.approx(1000, rel=0.01)
+
+    def test_r_half_and_c_dbl(self):
+        result = solve("twin_t_notch", {"f_notch_hz": 1000})
+        r, r_half, c, c_dbl = _parse_twin_t(result)
+        assert r_half == pytest.approx(r / 2.0, rel=0.01)
+        assert c_dbl == pytest.approx(2.0 * c, rel=0.01)
+
+    def test_missing_spec(self):
+        with pytest.raises(ValueError, match="requires"):
+            solve("twin_t_notch", {})
+
+    def test_negative_freq(self):
+        with pytest.raises(ValueError, match="positive"):
+            solve("twin_t_notch", {"f_notch_hz": -100})
+
+
+# ===========================================================================
 # solver: Unknown topology
 # ===========================================================================
 
@@ -357,3 +606,33 @@ def _parse_sallen_all(
 def _parse_divider(result: dict) -> tuple[float, float]:
     c = result["components"]
     return _parse_eng(c["R1"]), _parse_eng(c["R2"])
+
+
+def _parse_mfb(
+    result: dict,
+) -> tuple[float, float, float, float, float]:
+    c = result["components"]
+    return (
+        _parse_eng(c["R1"]),
+        _parse_eng(c["R2"]),
+        _parse_eng(c["R3"]),
+        _parse_eng(c["C1"]),
+        _parse_eng(c["C2"]),
+    )
+
+
+def _parse_hpf_caps(result: dict) -> tuple[float, float]:
+    c = result["components"]
+    return _parse_eng(c["C1"]), _parse_eng(c["C2"])
+
+
+def _parse_twin_t(
+    result: dict,
+) -> tuple[float, float, float, float]:
+    c = result["components"]
+    return (
+        _parse_eng(c["R"]),
+        _parse_eng(c["R_half"]),
+        _parse_eng(c["C"]),
+        _parse_eng(c["C_dbl"]),
+    )

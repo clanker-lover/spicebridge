@@ -1,0 +1,18 @@
+{
+  "id": "sallen_key_hpf_2nd",
+  "name": "2nd-Order Sallen-Key High-Pass Filter",
+  "category": "filters",
+  "description": "Active second-order Sallen-Key high-pass filter using a unity-gain opamp buffer. Provides -40 dB/decade rolloff below the cutoff with Butterworth response when component values are chosen appropriately.",
+  "design_equations": [
+    "f_c = 1 / (2 * pi * sqrt(R1 * R2 * C1 * C2))",
+    "Q = sqrt(R1 * R2 * C1 * C2) / (R1 * (C1 + C2))",
+    "Butterworth (Q=0.707): set R1=R2=R, C1=2*C2"
+  ],
+  "netlist": "* 2nd-Order Sallen-Key High-Pass Filter\n.param R1=10k\n.param R2=10k\n.param C1=20n\n.param C2=10n\n.subckt ideal_opamp inp inn out\nE1 out 0 inp inn 100k\n.ends ideal_opamp\nV1 in 0 dc 0 ac 1\nC1 in n1 {C1}\nC2 n1 n2 {C2}\nR1 n1 out {R1}\nR2 n2 0 {R2}\nX1 out n2 out ideal_opamp",
+  "components": {
+    "R1": {"description": "Feedback resistor", "default": "10k"},
+    "R2": {"description": "Shunt resistor", "default": "10k"},
+    "C1": {"description": "First series capacitor", "default": "20n"},
+    "C2": {"description": "Second series capacitor", "default": "10n"}
+  }
+}

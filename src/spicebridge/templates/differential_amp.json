@@ -1,0 +1,18 @@
+{
+  "id": "differential_amp",
+  "name": "Differential Amplifier",
+  "category": "amplifiers",
+  "description": "Single opamp differential amplifier. Amplifies the difference between two input signals with gain set by resistor ratios. Requires matched resistor pairs for good common-mode rejection.",
+  "design_equations": [
+    "V_out = (R2 / R1) * (V2 - V1) when R2/R1 = R4/R3",
+    "Gain = R2 / R1",
+    "CMRR depends on resistor matching"
+  ],
+  "netlist": "* Differential Amplifier\n.param R1=10k\n.param R2=10k\n.param R3=10k\n.param R4=10k\n.subckt ideal_opamp inp inn out\nE1 out 0 inp inn 100k\n.ends ideal_opamp\nV1 inp1 0 dc 0 ac 1\nV2 inp2 0 dc 0\nR1 inp1 vminus {R1}\nR2 vminus out {R2}\nR3 inp2 vplus {R3}\nR4 vplus 0 {R4}\nX1 vplus vminus out ideal_opamp",
+  "components": {
+    "R1": {"description": "Inverting input resistor", "default": "10k"},
+    "R2": {"description": "Feedback resistor", "default": "10k"},
+    "R3": {"description": "Non-inverting input resistor", "default": "10k"},
+    "R4": {"description": "Non-inverting ground resistor", "default": "10k"}
+  }
+}

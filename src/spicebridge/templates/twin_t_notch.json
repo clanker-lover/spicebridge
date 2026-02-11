@@ -1,0 +1,18 @@
+{
+  "id": "twin_t_notch",
+  "name": "Twin-T Notch Filter",
+  "category": "filters",
+  "description": "Passive twin-T notch filter buffered by a unity-gain opamp. Provides a deep null at the notch frequency using two T-networks: one resistive (R-2C-R) and one capacitive (C-R/2-C).",
+  "design_equations": [
+    "f_notch = 1 / (2 * pi * R * C)",
+    "Resistive T: two resistors R with shunt capacitor 2C",
+    "Capacitive T: two capacitors C with shunt resistor R/2"
+  ],
+  "netlist": "* Twin-T Notch Filter\n.param R=10k\n.param R_half=5k\n.param C=10n\n.param C_dbl=20n\n.subckt ideal_opamp inp inn out\nE1 out 0 inp inn 100k\n.ends ideal_opamp\nV1 in 0 dc 0 ac 1\nR1 in n1 {R}\nR2 n1 nt {R}\nC3 n1 0 {C_dbl}\nC1 in n2 {C}\nC2 n2 nt {C}\nR3 n2 0 {R_half}\nX1 nt out out ideal_opamp",
+  "components": {
+    "R": {"description": "Resistive T-network resistor", "default": "10k"},
+    "R_half": {"description": "Capacitive T-network shunt resistor (R/2)", "default": "5k"},
+    "C": {"description": "Capacitive T-network capacitor", "default": "10n"},
+    "C_dbl": {"description": "Resistive T-network shunt capacitor (2C)", "default": "20n"}
+  }
+}

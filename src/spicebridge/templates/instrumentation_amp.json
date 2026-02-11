@@ -1,0 +1,21 @@
+{
+  "id": "instrumentation_amp",
+  "name": "Instrumentation Amplifier",
+  "category": "amplifiers",
+  "description": "Three-opamp instrumentation amplifier with high input impedance and adjustable gain via a single resistor Rg. First stage provides differential gain, second stage is a unity-gain difference amplifier.",
+  "design_equations": [
+    "Gain = 1 + 2 * R1 / Rg",
+    "R1 = R2 (matched input stage feedback)",
+    "R3 = R4 = R5 = R6 (matched difference stage)"
+  ],
+  "netlist": "* Instrumentation Amplifier\n.param R1=10k\n.param R2=10k\n.param R3=10k\n.param R4=10k\n.param R5=10k\n.param R6=10k\n.param Rg=10k\n.subckt ideal_opamp inp inn out\nE1 out 0 inp inn 100k\n.ends ideal_opamp\nV1 inp1 0 dc 0 ac 1\nV2 inp2 0 dc 0\nX1 inp1 inv1 out1 ideal_opamp\nX2 inp2 inv2 out2 ideal_opamp\nR1 out1 inv1 {R1}\nRg inv1 inv2 {Rg}\nR2 out2 inv2 {R2}\nR3 out1 vminus {R3}\nR4 vminus out {R4}\nR5 out2 vplus {R5}\nR6 vplus 0 {R6}\nX3 vplus vminus out ideal_opamp",
+  "components": {
+    "R1": {"description": "First stage feedback resistor 1", "default": "10k"},
+    "R2": {"description": "First stage feedback resistor 2", "default": "10k"},
+    "R3": {"description": "Difference stage input resistor 1", "default": "10k"},
+    "R4": {"description": "Difference stage feedback resistor", "default": "10k"},
+    "R5": {"description": "Difference stage input resistor 2", "default": "10k"},
+    "R6": {"description": "Difference stage ground resistor", "default": "10k"},
+    "Rg": {"description": "Gain-setting resistor", "default": "10k"}
+  }
+}

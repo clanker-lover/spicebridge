@@ -25,7 +25,7 @@ def test_list_templates_all():
 def test_list_templates_filter_category():
     result = list_templates(category="filters")
     assert result["status"] == "ok"
-    assert result["count"] == 3
+    assert result["count"] == 6
     assert all(t["category"] == "filters" for t in result["templates"])
 
 
