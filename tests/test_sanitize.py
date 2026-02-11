@@ -4,7 +4,9 @@ import pytest
 
 from spicebridge.sanitize import (
     MAX_NETLIST_SIZE,
+    safe_error_response,
     safe_path,
+    sanitize_error,
     sanitize_netlist,
     validate_component_value,
     validate_filename,
@@ -298,3 +300,44 @@ class TestValidateFormat:
     def test_empty_format_rejected(self):
         with pytest.raises(ValueError, match="Invalid format"):
             validate_format("")
+
+
+# ---------------------------------------------------------------------------
+# sanitize_error / safe_error_response
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeError:
+    """Tests for error message path scrubbing."""
+
+    def test_strips_home_path(self):
+        msg = sanitize_error(RuntimeError("Cannot open /home/user/project/data.txt"))
+        assert "/home/" not in msg
+        assert "<path>" in msg
+
+    def test_strips_tmp_path(self):
+        msg = sanitize_error(OSError("No such file: /tmp/spicebridge_abc123/out.raw"))
+        assert "/tmp/" not in msg
+        assert "<path>" in msg
+
+    def test_preserves_non_path_message(self):
+        msg = sanitize_error(ValueError("points_per_decade must be between 1 and 1000"))
+        assert msg == "points_per_decade must be between 1 and 1000"
+
+    def test_multiple_paths_stripped(self):
+        msg = sanitize_error(RuntimeError("copy /home/a/x to /tmp/b/y failed"))
+        assert "/home/" not in msg
+        assert "/tmp/" not in msg
+        assert msg.count("<path>") == 2
+
+
+class TestSafeErrorResponse:
+    def test_returns_error_dict(self):
+        import logging
+
+        lgr = logging.getLogger("test.safe_error_response")
+        exc = RuntimeError("Failed at /home/user/project/sim.raw")
+        result = safe_error_response(exc, lgr, "test_context")
+        assert result["status"] == "error"
+        assert "/home/" not in result["error"]
+        assert "<path>" in result["error"]

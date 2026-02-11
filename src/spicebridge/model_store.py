@@ -94,8 +94,7 @@ class ModelStore:
                 {
                     "name": name,
                     "component_type": entry["component_type"],
-                    "file_path": str(self._base_dir / f"{name}.lib"),
-                    "include_statement": f".include {self._base_dir / f'{name}.lib'}",
+                    "file_path": f"{name}.lib",
                     "parameters": entry.get("parameters", {}),
                 }
             )

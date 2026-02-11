@@ -624,3 +624,41 @@ class TestAnalysisParameterCasting:
         result = run_ac_analysis(cid, points_per_decade="ten")
         assert result["status"] == "error"
         assert "Invalid analysis parameter" in result["error"]
+
+
+# ===========================================================================
+# Class 15: Error Sanitization & Silent Failure Fixes
+# ===========================================================================
+
+
+class TestErrorSanitization:
+    """Verify error responses do not leak filesystem paths."""
+
+    def test_monte_carlo_all_fail_returns_error(self):
+        setup = create_circuit(_CLEAN_NETLIST)
+        cid = setup["circuit_id"]
+        with patch("spicebridge.server.run_single_sim", return_value=None):
+            result = run_monte_carlo(cid, analysis_type="ac", num_runs=5)
+        assert result["status"] == "error"
+        assert "simulations failed" in result["error"]
+
+    def test_list_models_no_absolute_paths(self, tmp_path):
+        from spicebridge.model_store import ModelStore
+
+        store = ModelStore(base_dir=tmp_path)
+        store.save(generate_model("diode", "DTest"))
+        models = store.list_models()
+        for entry in models:
+            for value in entry.values():
+                if isinstance(value, str):
+                    assert "/home/" not in value
+                    assert "/tmp/" not in value
+
+    def test_draw_schematic_no_absolute_path(self):
+        setup = create_circuit(_CLEAN_NETLIST)
+        cid = setup["circuit_id"]
+        with patch("spicebridge.server._draw_schematic"):
+            result = draw_schematic(cid, fmt="png")
+        if result["status"] == "ok":
+            assert "/home/" not in result["filepath"]
+            assert "/tmp/" not in result["filepath"]

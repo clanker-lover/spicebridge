@@ -317,9 +317,9 @@ class TestIntegration:
         export = server_export_kicad(cid)
         assert export["status"] == "ok"
         assert export["num_components"] == 3
-        filepath = Path(export["file_path"])
-        assert filepath.exists()
-        assert filepath.stat().st_size > 0
+        # file_path is now a bare filename (no absolute path leak)
+        assert "/" not in export["file_path"]
+        assert export["file_path"].endswith(".kicad_sch")
 
     def test_server_export_invalid_id(self):
         result = server_export_kicad("nonexistent")

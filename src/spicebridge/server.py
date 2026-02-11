@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import time
 
 from mcp.server.fastmcp import FastMCP
@@ -31,6 +32,7 @@ from spicebridge.parser import (
     read_ac_bandwidth,
 )
 from spicebridge.sanitize import (
+    safe_error_response,
     safe_path,
     sanitize_netlist,
     validate_component_value,
@@ -60,6 +62,12 @@ mcp = FastMCP("SPICEBridge")
 _manager = CircuitManager()
 _templates = TemplateManager()
 _models = ModelStore()
+
+if not shutil.which("ngspice"):
+    logger.warning(
+        "ngspice not found on PATH. Simulation tools will fail. "
+        "Install with: sudo apt install ngspice"
+    )
 
 # Patterns for analysis commands to strip (case-insensitive)
 _ANALYSIS_RE = re.compile(r"^\s*\.(ac|tran|op|dc)\b", re.IGNORECASE)
@@ -137,7 +145,7 @@ def create_circuit(netlist: str, models: list[str] | None = None) -> dict:
         detected = auto_detect_ports(netlist)
         if detected:
             _manager.set_ports(circuit_id, detected)
-    except Exception:
+    except (ValueError, KeyError, IndexError):
         logger.debug("Port auto-detection failed", exc_info=True)
     viewer = get_viewer_server()
     if viewer is not None:
@@ -196,7 +204,7 @@ def run_ac_analysis(
             viewer.notify_change({"type": "results_updated", "circuit_id": circuit_id})
         return {"status": "ok", "results": results}
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        return safe_error_response(e, logger, "run_ac_analysis")
 
 
 @mcp.tool()
@@ -249,7 +257,7 @@ def run_transient(
             viewer.notify_change({"type": "results_updated", "circuit_id": circuit_id})
         return {"status": "ok", "results": results}
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        return safe_error_response(e, logger, "run_transient")
 
 
 @mcp.tool()
@@ -274,7 +282,7 @@ def run_dc_op(circuit_id: str) -> dict:
             viewer.notify_change({"type": "results_updated", "circuit_id": circuit_id})
         return {"status": "ok", "results": results}
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        return safe_error_response(e, logger, "run_dc_op")
 
 
 def _summarize_results(data: object) -> object:
@@ -336,9 +344,9 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> dict:
     try:
         output_file = safe_path(circuit.output_dir, f"schematic.{fmt}")
         _draw_schematic(circuit.netlist, output_file, fmt=fmt)
-        return {"status": "ok", "filepath": str(output_file), "format": fmt}
+        return {"status": "ok", "filepath": output_file.name, "format": fmt}
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        return safe_error_response(e, logger, "draw_schematic")
 
 
 @mcp.tool()
@@ -359,12 +367,12 @@ def export_kicad(circuit_id: str, filename: str | None = None) -> dict:
         comps = parse_netlist(circuit.netlist)
         return {
             "status": "ok",
-            "file_path": str(output_path),
+            "file_path": output_path.name,
             "num_components": len(comps),
             "warnings": warnings,
         }
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        return safe_error_response(e, logger, "export_kicad")
 
 
 @mcp.tool()
@@ -373,7 +381,7 @@ def open_viewer(circuit_id: str | None = None, port: int = 8080) -> dict:
     try:
         url = start_viewer(_manager, port=port)
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        return safe_error_response(e, logger, "open_viewer")
     result: dict = {"status": "ok", "url": url, "port": port}
     if circuit_id is not None:
         result["circuit_id"] = circuit_id
@@ -417,7 +425,7 @@ def get_ports(circuit_id: str) -> dict:
     if ports is None:
         try:
             ports = auto_detect_ports(circuit.netlist)
-        except Exception:
+        except (ValueError, KeyError, IndexError):
             ports = {}
     return {"status": "ok", "circuit_id": circuit_id, "ports": ports}
 
@@ -457,7 +465,7 @@ def connect_stages(
         if ports is None:
             try:
                 ports = auto_detect_ports(circuit.netlist)
-            except Exception:
+            except (ValueError, KeyError, IndexError):
                 ports = {}
         if not ports:
             return {
@@ -576,7 +584,7 @@ def load_template(
             detected = auto_detect_ports(netlist)
             if detected:
                 _manager.set_ports(circuit_id, detected)
-        except Exception:
+        except (ValueError, KeyError, IndexError):
             logger.debug("Port auto-detection failed", exc_info=True)
     preview_lines = netlist.strip().splitlines()[:5]
     result = {
@@ -791,7 +799,7 @@ def measure_bandwidth(circuit_id: str, threshold_db: float = -3.0) -> dict:
     try:
         bw = read_ac_bandwidth(raw_path, threshold_db)
     except Exception as e:
-        return {"status": "error", "error": str(e)}
+        return safe_error_response(e, logger, "measure_bandwidth")
 
     return {
         "status": "ok",
@@ -1128,8 +1136,7 @@ def create_model(
         "status": "ok",
         "model_name": model.name,
         "component_type": model.component_type,
-        "file_path": str(lib_path),
-        "include_statement": f".include {lib_path}",
+        "file_path": lib_path.name,
         "model_text": model.spice_text,
         "parameters_used": model.parameters,
         "notes": model.notes,
@@ -1371,6 +1378,15 @@ def run_monte_carlo(
             failures.append({"run": i, "error": "Simulation failed"})
 
     statistics = compute_statistics(all_results)
+
+    if not all_results:
+        return {
+            "status": "error",
+            "error": f"All {len(failures)} Monte Carlo simulations failed",
+            "num_runs": num_runs,
+            "num_failed": len(failures),
+            "analysis_type": analysis_type,
+        }
 
     response: dict = {
         "status": "ok",

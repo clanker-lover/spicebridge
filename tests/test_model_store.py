@@ -95,8 +95,15 @@ class TestListModels:
         assert "name" in entry
         assert "component_type" in entry
         assert "file_path" in entry
-        assert "include_statement" in entry
         assert "parameters" in entry
+
+    def test_file_path_is_bare_filename(self, tmp_path):
+        store = ModelStore(base_dir=tmp_path)
+        store.save(generate_model("diode", "DTest"))
+        models = store.list_models()
+        entry = models[0]
+        assert "/" not in entry["file_path"]
+        assert entry["file_path"] == "DTest.lib"
 
 
 class TestDelete:

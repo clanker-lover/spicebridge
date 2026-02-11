@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import concurrent.futures
+import logging
 import shutil
 import subprocess  # nosec B404 — used with list args, no shell=True
 import tempfile
 import threading
 from pathlib import Path
 
-_ngspice_available: bool | None = None
+logger = logging.getLogger(__name__)
 
 _SIMULATION_TIMEOUT = 60
 _MAX_CONCURRENT_SIMS = 4
@@ -17,11 +18,8 @@ _sim_semaphore = threading.Semaphore(_MAX_CONCURRENT_SIMS)
 
 
 def _check_ngspice() -> bool:
-    """Check whether ngspice is available on PATH (result is cached)."""
-    global _ngspice_available  # noqa: PLW0603
-    if _ngspice_available is None:
-        _ngspice_available = shutil.which("ngspice") is not None
-    return _ngspice_available
+    """Check whether ngspice is available on PATH."""
+    return shutil.which("ngspice") is not None
 
 
 def _run_via_spicelib(netlist_file: Path, raw_file: Path) -> bool:
@@ -33,9 +31,14 @@ def _run_via_spicelib(netlist_file: Path, raw_file: Path) -> bool:
             future = pool.submit(NGspiceSimulator.run, str(netlist_file))
             future.result(timeout=_SIMULATION_TIMEOUT)
         return raw_file.exists() and raw_file.stat().st_size > 0
-    except concurrent.futures.TimeoutError:
+    except ImportError:
+        logger.debug("spicelib not installed, skipping spicelib backend")
         return False
-    except Exception:
+    except concurrent.futures.TimeoutError:
+        logger.debug("spicelib simulation timed out after %ss", _SIMULATION_TIMEOUT)
+        return False
+    except (OSError, RuntimeError) as exc:
+        logger.debug("spicelib simulation failed: %s", exc)
         return False
 
 
@@ -48,9 +51,18 @@ def _run_via_subprocess(netlist_file: Path, raw_file: Path) -> bool:
             timeout=_SIMULATION_TIMEOUT,
         )
         if result.returncode != 0:
+            logger.debug(
+                "ngspice exited with code %d: %s",
+                result.returncode,
+                result.stderr[:500] if result.stderr else "",
+            )
             return False
         return raw_file.exists() and raw_file.stat().st_size > 0
-    except Exception:
+    except subprocess.TimeoutExpired:
+        logger.debug("ngspice subprocess timed out after %ss", _SIMULATION_TIMEOUT)
+        return False
+    except OSError as exc:
+        logger.debug("ngspice subprocess failed: %s", exc)
         return False
 
 

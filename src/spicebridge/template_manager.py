@@ -59,7 +59,8 @@ class TemplateManager:
                 source=source,
                 ports=data.get("ports"),
             )
-        except Exception:
+        except (json.JSONDecodeError, KeyError, OSError) as exc:
+            logger.warning("Failed to load template %s: %s", path.name, exc)
             return None
 
     def _load_all(self) -> dict[str, Template]:

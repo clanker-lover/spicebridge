@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import logging
 import random
 import re
 import tempfile
@@ -14,6 +15,8 @@ import numpy as np
 from spicebridge.parser import parse_results
 from spicebridge.simulator import run_simulation
 from spicebridge.standard_values import format_engineering, parse_spice_value
+
+logger = logging.getLogger(__name__)
 
 # Patterns for analysis commands to strip (same as server.py)
 _ANALYSIS_RE = re.compile(r"^\s*\.(ac|tran|op|dc)\b", re.IGNORECASE)
@@ -59,6 +62,9 @@ def parse_component_values(netlist: str) -> list[ComponentInfo]:
             try:
                 value = parse_spice_value(val_str)
             except (ValueError, IndexError):
+                logger.warning(
+                    "Skipping .param %s: cannot parse value '%s'", ref, val_str
+                )
                 continue
             components[ref] = ComponentInfo(
                 ref=ref, value=value, value_str=val_str, line_num=i, source="param"
@@ -77,6 +83,9 @@ def parse_component_values(netlist: str) -> list[ComponentInfo]:
             try:
                 value = parse_spice_value(val_str)
             except (ValueError, IndexError):
+                logger.warning(
+                    "Skipping instance %s: cannot parse value '%s'", ref, val_str
+                )
                 continue
             components[ref] = ComponentInfo(
                 ref=ref, value=value, value_str=val_str, line_num=i, source="instance"
@@ -262,10 +271,12 @@ def run_single_sim(netlist: str, analysis_cmd: str) -> dict | None:
         try:
             success = run_simulation(prepared, output_dir=tmpdir_path)
             if not success:
+                logger.debug("Monte Carlo sim returned no output")
                 return None
             raw_path = tmpdir_path / "circuit.raw"
             return parse_results(raw_path)
-        except Exception:
+        except (RuntimeError, OSError, ValueError) as exc:
+            logger.debug("Monte Carlo sim failed: %s", exc)
             return None
 
 

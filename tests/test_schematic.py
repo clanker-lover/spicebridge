@@ -171,9 +171,9 @@ class TestSchematicIntegration:
         schem = server_draw_schematic(cid, fmt="png")
         assert schem["status"] == "ok"
         assert schem["format"] == "png"
-        filepath = Path(schem["filepath"])
-        assert filepath.exists()
-        assert os.path.getsize(filepath) > 0
+        # filepath is now a bare filename (no absolute path leak)
+        assert "/" not in schem["filepath"]
+        assert schem["filepath"] == "schematic.png"
 
     def test_server_draw_schematic_invalid_id(self):
         result = server_draw_schematic("nonexistent", fmt="png")

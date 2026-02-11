@@ -6,6 +6,7 @@ path traversal, and other input-based attacks.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
@@ -222,3 +223,23 @@ def validate_format(fmt: str) -> str:
     if fmt not in allowed:
         raise ValueError(f"Invalid format '{fmt}': must be one of {allowed}")
     return fmt
+
+
+# ---------------------------------------------------------------------------
+# Error sanitization — strip internal paths from messages sent to clients
+# ---------------------------------------------------------------------------
+
+_PATH_RE = re.compile(r"/(?:home|tmp|usr|etc|var)[^\s:,)]*")
+
+
+def sanitize_error(exc: Exception) -> str:
+    """Convert an exception to a string with internal filesystem paths scrubbed."""
+    return _PATH_RE.sub("<path>", str(exc))
+
+
+def safe_error_response(
+    exc: Exception, logger: logging.Logger, context: str = ""
+) -> dict:
+    """Log the full exception at DEBUG and return a sanitized error dict."""
+    logger.debug("Error in %s: %s", context, exc, exc_info=True)
+    return {"status": "error", "error": sanitize_error(exc)}
