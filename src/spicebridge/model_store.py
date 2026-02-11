@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from spicebridge.model_generator import GeneratedModel
+from spicebridge.model_generator import GeneratedModel, _validate_name
 from spicebridge.sanitize import safe_path
 
 
@@ -55,6 +55,7 @@ class ModelStore:
         Overwrites any existing model with the same name.
         Returns the absolute path to the ``.lib`` file.
         """
+        _validate_name(model.name)
         self._ensure_dir()
         lib_path = safe_path(self._base_dir, f"{model.name}.lib")
         lib_path.write_text(model.spice_text)
@@ -119,6 +120,7 @@ class ModelStore:
 
         Raises ``KeyError`` if the model does not exist in the index.
         """
+        _validate_name(name)
         index = self._load_index()
         if name not in index:
             raise KeyError(f"Model '{name}' not found")

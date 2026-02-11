@@ -125,8 +125,12 @@ header h1 { font-size: 16px; font-weight: 600; color: #4fc3f7; }
     let pollTimer = null;
 
     // --- API helpers ---
+    const authToken = window.__SPICEBRIDGE_TOKEN || '';
+
     async function apiFetch(path) {
-        const resp = await fetch(path);
+        const headers = {};
+        if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+        const resp = await fetch(path, { headers });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         return resp;
     }
@@ -358,7 +362,8 @@ header h1 { font-size: 16px; font-weight: 600; color: #4fc3f7; }
     function connectWS() {
         if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const url = `${proto}//${window.location.host}/ws`;
+        let url = `${proto}//${window.location.host}/ws`;
+        if (authToken) url += `?token=${encodeURIComponent(authToken)}`;
         try {
             ws = new WebSocket(url);
         } catch (e) {

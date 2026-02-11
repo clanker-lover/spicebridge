@@ -8,11 +8,11 @@ from spicebridge.circuit_manager import CircuitManager
 
 
 def test_create_returns_valid_id():
-    """create() should return an 8-char hex string."""
+    """create() should return a 32-char hex string."""
     mgr = CircuitManager()
     cid = mgr.create("* test netlist\n.end\n")
-    assert len(cid) == 8
-    assert re.fullmatch(r"[0-9a-f]{8}", cid)
+    assert len(cid) == 32
+    assert re.fullmatch(r"[0-9a-f]{32}", cid)
 
 
 def test_create_output_dir_exists():

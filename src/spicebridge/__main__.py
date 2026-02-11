@@ -9,7 +9,35 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import os
+
+logger = logging.getLogger(__name__)
+
+
+def _run_with_auth(mcp, transport: str, host: str, port: int, api_key: str) -> None:
+    """Start the MCP server with API key middleware via uvicorn."""
+    import anyio
+    import uvicorn
+
+    from spicebridge.auth import ApiKeyMiddleware
+
+    app = mcp.sse_app() if transport == "sse" else mcp.streamable_http_app()
+    app = ApiKeyMiddleware(app, api_key)
+
+    log_level = getattr(mcp.settings, "log_level", "info")
+
+    async def _serve() -> None:
+        config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level=log_level,
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+
+    anyio.run(_serve)
 
 
 def main() -> None:
@@ -45,7 +73,18 @@ def main() -> None:
     if args.transport != "stdio":
         configure_for_remote()
 
-    mcp.run(transport=args.transport)
+    api_key = os.environ.get("SPICEBRIDGE_API_KEY", "")
+
+    if api_key and args.transport != "stdio":
+        logger.info("API key authentication enabled for %s transport", args.transport)
+        _run_with_auth(mcp, args.transport, args.host, args.port, api_key)
+    else:
+        if not api_key and args.transport != "stdio":
+            logger.warning(
+                "No API key configured — MCP server is unauthenticated. "
+                "Set SPICEBRIDGE_API_KEY to enable authentication."
+            )
+        mcp.run(transport=args.transport)
 
 
 if __name__ == "__main__":

@@ -383,6 +383,11 @@ def open_viewer(circuit_id: str | None = None, port: int = 8080) -> dict:
     except Exception as e:
         return safe_error_response(e, logger, "open_viewer")
     result: dict = {"status": "ok", "url": url, "port": port}
+    viewer = get_viewer_server()
+    if viewer is not None:
+        token = viewer._auth_token
+        result["auth_token"] = token
+        result["authenticated_url"] = f"{url}?token={token}"
     if circuit_id is not None:
         result["circuit_id"] = circuit_id
         result["hint"] = f"Open {url}#circuit={circuit_id} to view this circuit"

@@ -35,7 +35,7 @@ def test_full_ac_loop():
     result = create_circuit(RC_LOWPASS)
     assert result["status"] == "ok"
     cid = result["circuit_id"]
-    assert len(cid) == 8
+    assert len(cid) == 32
 
     ac = run_ac_analysis(cid, start_freq=1.0, stop_freq=1e6, points_per_decade=10)
     assert ac["status"] == "ok"

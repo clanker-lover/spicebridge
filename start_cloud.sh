@@ -36,6 +36,14 @@ if ! command -v cloudflared &>/dev/null; then
     exit 1
 fi
 
+# --- API key generation ---
+
+if [ -z "${SPICEBRIDGE_API_KEY:-}" ]; then
+    SPICEBRIDGE_API_KEY=$("$VENV_PYTHON" -c "import secrets; print(secrets.token_urlsafe(32))")
+    echo "Generated API key: $SPICEBRIDGE_API_KEY"
+fi
+export SPICEBRIDGE_API_KEY
+
 # --- Cleanup on exit ---
 
 SERVER_PID=""
@@ -60,7 +68,7 @@ SERVER_PID=$!
 # Wait for server to be ready
 echo "Waiting for server..."
 for i in $(seq 1 30); do
-    if curl -sf "http://$HOST:$PORT/mcp" -o /dev/null --max-time 1 2>/dev/null; then
+    if curl -sf -H "Authorization: Bearer $SPICEBRIDGE_API_KEY" "http://$HOST:$PORT/mcp" -o /dev/null --max-time 1 2>/dev/null; then
         echo "Server ready."
         break
     fi
@@ -87,13 +95,17 @@ echo " SPICEBridge cloud MCP server is running"
 echo "========================================="
 echo ""
 echo "Permanent URL: $TUNNEL_URL/mcp"
+echo "API Key:       $SPICEBRIDGE_API_KEY"
 echo ""
 echo "MCP client config (add to your client's settings):"
 echo ""
 echo "  {"
 echo "    \"mcpServers\": {"
 echo "      \"spicebridge\": {"
-echo "        \"url\": \"$TUNNEL_URL/mcp\""
+echo "        \"url\": \"$TUNNEL_URL/mcp\","
+echo "        \"headers\": {"
+echo "          \"Authorization\": \"Bearer $SPICEBRIDGE_API_KEY\""
+echo "        }"
 echo "      }"
 echo "    }"
 echo "  }"

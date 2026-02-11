@@ -109,9 +109,18 @@ def manager():
 
 
 @pytest.fixture
-def viewer_app(manager):
-    server = _ViewerServer(manager, "127.0.0.1", 0)
-    return server._build_app()
+def viewer_server(manager):
+    return _ViewerServer(manager, "127.0.0.1", 0)
+
+
+@pytest.fixture
+def auth_token(viewer_server):
+    return viewer_server._auth_token
+
+
+@pytest.fixture
+def viewer_app(viewer_server):
+    return viewer_server._build_app()
 
 
 @pytest.fixture
@@ -270,7 +279,7 @@ class TestPathTraversal:
         assert "Invalid format" in result["error"]
 
     def test_circuit_id_is_safe_hex(self):
-        pattern = re.compile(r"^[0-9a-f]{8}$")
+        pattern = re.compile(r"^[0-9a-f]{32}$")
         for _ in range(50):
             result = create_circuit(_CLEAN_NETLIST)
             assert result["status"] == "ok"
@@ -333,37 +342,47 @@ class TestWebViewerSecurity:
         assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
 
     @pytest.mark.asyncio
-    async def test_security_headers_on_api(self, cli):
-        resp = await cli.get("/api/circuits")
+    async def test_security_headers_on_api(self, cli, auth_token):
+        resp = await cli.get(
+            "/api/circuits", headers={"Authorization": f"Bearer {auth_token}"}
+        )
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
         assert resp.headers["X-Frame-Options"] == "DENY"
         assert "Content-Security-Policy" in resp.headers
         assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
 
     @pytest.mark.asyncio
-    async def test_websocket_rejects_foreign_origin(self, cli):
-        resp = await cli.get("/ws", headers={"Origin": "http://evil.com"})
+    async def test_websocket_rejects_foreign_origin(self, cli, auth_token):
+        resp = await cli.get(
+            f"/ws?token={auth_token}", headers={"Origin": "http://evil.com"}
+        )
         assert resp.status == 403
 
     @pytest.mark.asyncio
-    async def test_websocket_accepts_localhost_origin(self, cli):
-        ws = await cli.ws_connect("/ws", headers={"Origin": "http://localhost"})
+    async def test_websocket_accepts_localhost_origin(self, cli, auth_token):
+        ws = await cli.ws_connect(
+            f"/ws?token={auth_token}", headers={"Origin": "http://localhost"}
+        )
         await ws.close()
 
     @pytest.mark.asyncio
-    async def test_websocket_accepts_127_origin(self, cli):
-        ws = await cli.ws_connect("/ws", headers={"Origin": "http://127.0.0.1"})
+    async def test_websocket_accepts_127_origin(self, cli, auth_token):
+        ws = await cli.ws_connect(
+            f"/ws?token={auth_token}", headers={"Origin": "http://127.0.0.1"}
+        )
         await ws.close()
 
     @pytest.mark.asyncio
-    async def test_websocket_accepts_no_origin(self, cli):
-        ws = await cli.ws_connect("/ws")
+    async def test_websocket_accepts_no_origin(self, cli, auth_token):
+        ws = await cli.ws_connect(f"/ws?token={auth_token}")
         await ws.close()
 
     @pytest.mark.asyncio
-    async def test_no_directory_traversal_via_url(self, cli):
+    async def test_no_directory_traversal_via_url(self, cli, auth_token):
         for path in ["/../../etc/passwd", "/static/../secret"]:
-            resp = await cli.get(path)
+            resp = await cli.get(
+                path, headers={"Authorization": f"Bearer {auth_token}"}
+            )
             assert resp.status == 404, f"Expected 404 for {path}, got {resp.status}"
 
 

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from spicebridge.model_generator import generate_model
+from spicebridge.model_generator import GeneratedModel, generate_model
 from spicebridge.model_store import ModelStore
 
 # ---------------------------------------------------------------------------
@@ -139,6 +139,40 @@ class TestGetLibPath:
         store = ModelStore(base_dir=tmp_path)
         with pytest.raises(KeyError, match="not found"):
             store.get_lib_path("NoSuchModel")
+
+
+class TestModelStoreNameValidation:
+    """Verify model store re-validates names as defense-in-depth."""
+
+    def test_save_rejects_traversal_name(self, tmp_path):
+        store = ModelStore(base_dir=tmp_path)
+        model = GeneratedModel(
+            name="../../etc/passwd",
+            component_type="diode",
+            spice_text=".model bad D (IS=1e-14)\n",
+        )
+        with pytest.raises(ValueError):
+            store.save(model)
+
+    def test_get_lib_path_rejects_traversal_name(self, tmp_path):
+        store = ModelStore(base_dir=tmp_path)
+        with pytest.raises(ValueError):
+            store.get_lib_path("../../etc/passwd")
+
+    def test_save_rejects_empty_name(self, tmp_path):
+        store = ModelStore(base_dir=tmp_path)
+        model = GeneratedModel(
+            name="",
+            component_type="diode",
+            spice_text=".model bad D (IS=1e-14)\n",
+        )
+        with pytest.raises(ValueError):
+            store.save(model)
+
+    def test_get_lib_path_rejects_empty_name(self, tmp_path):
+        store = ModelStore(base_dir=tmp_path)
+        with pytest.raises(ValueError):
+            store.get_lib_path("")
 
 
 class TestDirectoryCreation:

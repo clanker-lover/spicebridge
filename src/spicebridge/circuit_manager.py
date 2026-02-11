@@ -46,7 +46,7 @@ class CircuitManager:
             )
             self.delete(oldest_id)
 
-        circuit_id = uuid.uuid4().hex[:8]
+        circuit_id = uuid.uuid4().hex
         output_dir = Path(tempfile.mkdtemp(prefix=f"spicebridge_{circuit_id}_"))
         self._circuits[circuit_id] = CircuitState(
             circuit_id=circuit_id,

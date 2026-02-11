@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hmac
 import importlib.resources  # nosemgrep: python37-compatibility-importlib2
 import json
 import logging
+import secrets
 import threading
 import webbrowser
 from typing import Any
@@ -41,6 +43,33 @@ async def security_headers(request: web.Request, handler):
     return response
 
 
+def _make_token_auth_middleware(auth_token: str):
+    """Return an aiohttp middleware that checks a bearer token on API/WS routes."""
+
+    @web.middleware
+    async def token_auth(request: web.Request, handler):
+        # Skip auth for the HTML index page
+        if request.path == "/":
+            return await handler(request)
+
+        # Check query parameter first, then Authorization header
+        token = request.query.get("token")
+        if not token:
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                token = auth_header[7:]
+
+        if not token or not hmac.compare_digest(token, auth_token):
+            raise web.HTTPUnauthorized(
+                text="Valid authentication token required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        return await handler(request)
+
+    return token_auth
+
+
 # Module-level singleton
 _server: _ViewerServer | None = None
 _lock = threading.Lock()
@@ -53,6 +82,7 @@ class _ViewerServer:
         self.manager = manager
         self.host = host
         self.port = port
+        self._auth_token: str = secrets.token_urlsafe(32)
         self._ws_clients: list[web.WebSocketResponse] = []
         self._event_log: list[dict] = []
         self._event_lock = threading.Lock()
@@ -68,7 +98,8 @@ class _ViewerServer:
     # ------------------------------------------------------------------
 
     def _build_app(self) -> web.Application:
-        app = web.Application(middlewares=[security_headers])
+        token_auth = _make_token_auth_middleware(self._auth_token)
+        app = web.Application(middlewares=[security_headers, token_auth])
         app.router.add_get("/", self._handle_index)
         app.router.add_get("/api/circuits", self._handle_list_circuits)
         app.router.add_get("/api/circuit/{id}", self._handle_get_circuit)
@@ -80,6 +111,11 @@ class _ViewerServer:
     async def _handle_index(self, _request: web.Request) -> web.Response:
         ref = importlib.resources.files("spicebridge.static").joinpath("viewer.html")
         html = ref.read_text(encoding="utf-8")
+        # Inject auth token so JS can authenticate API/WS requests
+        token_script = (
+            f'<script>window.__SPICEBRIDGE_TOKEN = "{self._auth_token}";</script>'
+        )
+        html = html.replace("</head>", f"{token_script}\n</head>")
         return web.Response(text=html, content_type="text/html")
 
     async def _handle_list_circuits(self, _request: web.Request) -> web.Response:

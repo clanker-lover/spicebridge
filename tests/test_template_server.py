@@ -36,7 +36,7 @@ def test_list_templates_filter_category():
 def test_load_template_default_params():
     result = load_template("rc_lowpass_1st")
     assert result["status"] == "ok"
-    assert len(result["circuit_id"]) == 8
+    assert len(result["circuit_id"]) == 32
     assert "R1" in result["components"]
     assert len(result["design_equations"]) > 0
     # Default .param R1=10k should be in the preview
