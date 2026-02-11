@@ -6,12 +6,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-
-import schemdraw  # noqa: E402
-import schemdraw.elements as elm  # noqa: E402
+import schemdraw
+import schemdraw.elements as elm
 
 
 @dataclass
@@ -257,7 +253,7 @@ def draw_schematic(netlist: str, output_path: str | Path, fmt: str = "png") -> P
 
     sources, series, shunt = _classify_components(components)
 
-    d = schemdraw.Drawing(show=False)
+    d = schemdraw.Drawing(backend="svg", show=False)
 
     # Track node positions for connecting shunt components
     node_positions: dict[str, tuple[float, float]] = {}

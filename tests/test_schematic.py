@@ -179,3 +179,26 @@ class TestSchematicIntegration:
         result = server_draw_schematic("nonexistent", fmt="png")
         assert result["status"] == "error"
         assert "not found" in result["error"]
+
+
+def test_no_matplotlib_in_source():
+    """Verify schematic.py does not directly import matplotlib."""
+    import ast
+    import inspect
+
+    from spicebridge import schematic
+
+    source = inspect.getsource(schematic)
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert not alias.name.startswith("matplotlib"), (
+                    f"schematic.py imports matplotlib: {alias.name}"
+                )
+        elif (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and node.module.startswith("matplotlib")
+        ):
+            raise AssertionError(f"schematic.py imports from matplotlib: {node.module}")
