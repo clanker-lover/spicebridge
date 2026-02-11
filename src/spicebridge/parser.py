@@ -2,10 +2,26 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
 from spicelib import RawRead
+
+logger = logging.getLogger(__name__)
+
+_SWEEP_VARIABLES = frozenset({"frequency", "time", "v-sweep", "i-sweep", "temp-sweep"})
+
+
+def _sanitize_array(arr: np.ndarray, label: str) -> tuple[np.ndarray, list[str]]:
+    """Replace NaN values with 0.0 and return (cleaned_array, warnings)."""
+    warnings: list[str] = []
+    nan_mask = np.isnan(arr)
+    if np.any(nan_mask):
+        count = int(np.sum(nan_mask))
+        warnings.append(f"NaN detected in {label}: {count} value(s) replaced with 0.0")
+        arr = np.where(nan_mask, 0.0, arr)
+    return arr, warnings
 
 
 def detect_analysis_type(raw_path: str | Path) -> str:
@@ -20,8 +36,11 @@ def detect_analysis_type(raw_path: str | Path) -> str:
 def _select_output_trace(trace_names: list[str]) -> str:
     """Pick the best output trace from available trace names.
 
-    Priority: v(out) > first v(...) not in {v(in), v(v1)} > first trace.
+    Priority: v(out) > first v(...) not in {v(in), v(v1)} > first non-sweep trace.
     """
+    if not trace_names:
+        raise ValueError("No traces available")
+
     skip = {"v(in)", "v(v1)"}
     lower_names = [n.lower() for n in trace_names]
 
@@ -32,20 +51,58 @@ def _select_output_trace(trace_names: list[str]) -> str:
         if name.startswith("v(") and name.endswith(")") and name not in skip:
             return trace_names[i]
 
-    return trace_names[0]
+    candidates = [t for t in trace_names if t.lower() not in _SWEEP_VARIABLES]
+    if not candidates:
+        raise ValueError("No output traces found (only sweep variables present)")
+
+    return candidates[0]
 
 
 def parse_ac(raw_path: str | Path) -> dict:
     """Parse AC analysis results from a .raw file."""
-    raw = RawRead(str(raw_path), dialect="ngspice")
-    trace_names = raw.get_trace_names()
-    output_trace = _select_output_trace(trace_names)
+    warnings: list[str] = []
 
-    freq_data = raw.get_trace("frequency").get_wave(0)
+    try:
+        raw = RawRead(str(raw_path), dialect="ngspice")
+    except Exception as exc:
+        return {"error": f"Failed to read raw file: {exc}"}
+
+    trace_names = raw.get_trace_names()
+
+    try:
+        output_trace = _select_output_trace(trace_names)
+    except ValueError as exc:
+        return {"error": str(exc), "traces": list(trace_names)}
+
+    try:
+        freq_data = raw.get_trace("frequency").get_wave(0)
+    except KeyError:
+        return {
+            "error": "Trace 'frequency' not found in raw file",
+            "traces": list(trace_names),
+        }
+
     freqs = np.real(freq_data)
 
-    data = raw.get_trace(output_trace).get_wave(0)
-    mag_db = 20 * np.log10(np.abs(data) + 1e-20)
+    if len(freqs) == 0:
+        return {"error": "Empty frequency data", "traces": list(trace_names)}
+
+    freqs, w = _sanitize_array(freqs, "frequency")
+    warnings.extend(w)
+
+    try:
+        data = raw.get_trace(output_trace).get_wave(0)
+    except KeyError:
+        return {
+            "error": f"Trace '{output_trace}' not found in raw file",
+            "traces": list(trace_names),
+        }
+
+    abs_data = np.abs(data)
+    abs_data, w = _sanitize_array(abs_data, "magnitude")
+    warnings.extend(w)
+
+    mag_db = 20 * np.log10(abs_data + 1e-20)
     phase = np.angle(data, deg=True)
 
     # DC gain (first point)
@@ -88,7 +145,7 @@ def parse_ac(raw_path: str | Path) -> dict:
             f_3db = float(freqs[0])
             phase_at_f3db = float(phase[0])
 
-    return {
+    result = {
         "analysis_type": "AC Analysis",
         "traces": list(trace_names),
         "f_3dB_hz": f_3db,
@@ -100,19 +157,56 @@ def parse_ac(raw_path: str | Path) -> dict:
         "num_points": len(freqs),
         "freq_range": [float(freqs[0]), float(freqs[-1])],
     }
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 def parse_transient(raw_path: str | Path) -> dict:
     """Parse transient analysis results from a .raw file."""
-    raw = RawRead(str(raw_path), dialect="ngspice")
-    trace_names = raw.get_trace_names()
-    output_trace = _select_output_trace(trace_names)
+    warnings: list[str] = []
 
-    time = raw.get_trace("time").get_wave(0)
-    voltage = raw.get_trace(output_trace).get_wave(0)
+    try:
+        raw = RawRead(str(raw_path), dialect="ngspice")
+    except Exception as exc:
+        return {"error": f"Failed to read raw file: {exc}"}
+
+    trace_names = raw.get_trace_names()
+
+    try:
+        output_trace = _select_output_trace(trace_names)
+    except ValueError as exc:
+        return {"error": str(exc), "traces": list(trace_names)}
+
+    try:
+        time = raw.get_trace("time").get_wave(0)
+    except KeyError:
+        return {
+            "error": "Trace 'time' not found in raw file",
+            "traces": list(trace_names),
+        }
+
+    try:
+        voltage = raw.get_trace(output_trace).get_wave(0)
+    except KeyError:
+        return {
+            "error": f"Trace '{output_trace}' not found in raw file",
+            "traces": list(trace_names),
+        }
 
     time = np.real(time)
     voltage = np.real(voltage)
+
+    if len(time) == 0 or len(voltage) == 0:
+        return {
+            "error": "Empty time or voltage data",
+            "traces": list(trace_names),
+        }
+
+    time, w = _sanitize_array(time, "time")
+    warnings.extend(w)
+    voltage, w = _sanitize_array(voltage, "voltage")
+    warnings.extend(w)
 
     # Steady state: mean of last 10%
     n_last = max(1, len(voltage) // 10)
@@ -146,7 +240,7 @@ def parse_transient(raw_path: str | Path) -> dict:
                     settling_time = float(time[i + 1])
                 break
 
-    return {
+    result = {
         "analysis_type": "Transient Analysis",
         "traces": list(trace_names),
         "steady_state_value": steady_state,
@@ -157,22 +251,51 @@ def parse_transient(raw_path: str | Path) -> dict:
         "num_points": len(time),
         "time_range": [float(time[0]), float(time[-1])],
     }
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 def parse_dc_op(raw_path: str | Path) -> dict:
     """Parse DC operating point results from a .raw file."""
-    raw = RawRead(str(raw_path), dialect="ngspice")
+    warnings: list[str] = []
+
+    try:
+        raw = RawRead(str(raw_path), dialect="ngspice")
+    except Exception as exc:
+        return {"error": f"Failed to read raw file: {exc}"}
+
     trace_names = raw.get_trace_names()
+
+    if not trace_names:
+        return {"error": "No traces found in raw file"}
 
     nodes = {}
     for name in trace_names:
-        nodes[name] = float(raw.get_trace(name).get_wave(0)[0])
+        try:
+            wave = raw.get_trace(name).get_wave(0)
+        except Exception as exc:
+            warnings.append(f"Failed to read trace '{name}': {exc}")
+            continue
 
-    return {
+        if len(wave) == 0:
+            warnings.append(f"Empty wave data for trace '{name}'")
+            continue
+
+        value = float(wave[0])
+        if np.isnan(value):
+            warnings.append(f"NaN value for trace '{name}', replaced with 0.0")
+            value = 0.0
+        nodes[name] = value
+
+    result = {
         "analysis_type": "Operating Point",
         "nodes": nodes,
         "num_nodes": len(nodes),
     }
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 def read_ac_at_frequency(raw_path: str | Path, frequency_hz: float) -> dict:
@@ -181,12 +304,38 @@ def read_ac_at_frequency(raw_path: str | Path, frequency_hz: float) -> dict:
     Returns {"gain_db": float, "phase_deg": float}.
     Raises ValueError if frequency is outside the simulated range.
     """
-    raw = RawRead(str(raw_path), dialect="ngspice")
-    trace_names = raw.get_trace_names()
-    output_trace = _select_output_trace(trace_names)
+    warnings: list[str] = []
 
-    freq_data = raw.get_trace("frequency").get_wave(0)
+    try:
+        raw = RawRead(str(raw_path), dialect="ngspice")
+    except Exception as exc:
+        return {"error": f"Failed to read raw file: {exc}"}
+
+    trace_names = raw.get_trace_names()
+
+    try:
+        output_trace = _select_output_trace(trace_names)
+    except ValueError as exc:
+        return {"error": str(exc), "traces": list(trace_names)}
+
+    try:
+        freq_data = raw.get_trace("frequency").get_wave(0)
+    except KeyError:
+        return {
+            "error": "Trace 'frequency' not found in raw file",
+            "traces": list(trace_names),
+        }
+
     freqs = np.real(freq_data)
+
+    if len(freqs) == 0:
+        return {"error": "Empty frequency data", "traces": list(trace_names)}
+
+    if len(freqs) < 2:
+        return {
+            "error": "Insufficient frequency data for interpolation (need >= 2 points)",
+            "traces": list(trace_names),
+        }
 
     if frequency_hz < freqs[0] or frequency_hz > freqs[-1]:
         raise ValueError(
@@ -194,14 +343,28 @@ def read_ac_at_frequency(raw_path: str | Path, frequency_hz: float) -> dict:
             f"[{float(freqs[0])}, {float(freqs[-1])}] Hz"
         )
 
-    data = raw.get_trace(output_trace).get_wave(0)
-    mag_db = 20 * np.log10(np.abs(data) + 1e-20)
+    try:
+        data = raw.get_trace(output_trace).get_wave(0)
+    except KeyError:
+        return {
+            "error": f"Trace '{output_trace}' not found in raw file",
+            "traces": list(trace_names),
+        }
+
+    abs_data = np.abs(data)
+    abs_data, w = _sanitize_array(abs_data, "magnitude")
+    warnings.extend(w)
+
+    mag_db = 20 * np.log10(abs_data + 1e-20)
     phase = np.angle(data, deg=True)
 
     gain_db = float(np.interp(frequency_hz, freqs, mag_db))
     phase_deg = float(np.interp(frequency_hz, freqs, phase))
 
-    return {"gain_db": gain_db, "phase_deg": phase_deg}
+    result = {"gain_db": gain_db, "phase_deg": phase_deg}
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 def read_ac_bandwidth(raw_path: str | Path, threshold_db: float) -> dict:
@@ -212,15 +375,46 @@ def read_ac_bandwidth(raw_path: str | Path, threshold_db: float) -> dict:
 
     Returns {"f_cutoff_hz": float|None, "rolloff_db_per_decade": float|None}.
     """
-    raw = RawRead(str(raw_path), dialect="ngspice")
-    trace_names = raw.get_trace_names()
-    output_trace = _select_output_trace(trace_names)
+    warnings: list[str] = []
 
-    freq_data = raw.get_trace("frequency").get_wave(0)
+    try:
+        raw = RawRead(str(raw_path), dialect="ngspice")
+    except Exception as exc:
+        return {"error": f"Failed to read raw file: {exc}"}
+
+    trace_names = raw.get_trace_names()
+
+    try:
+        output_trace = _select_output_trace(trace_names)
+    except ValueError as exc:
+        return {"error": str(exc), "traces": list(trace_names)}
+
+    try:
+        freq_data = raw.get_trace("frequency").get_wave(0)
+    except KeyError:
+        return {
+            "error": "Trace 'frequency' not found in raw file",
+            "traces": list(trace_names),
+        }
+
     freqs = np.real(freq_data)
 
-    data = raw.get_trace(output_trace).get_wave(0)
-    mag_db = 20 * np.log10(np.abs(data) + 1e-20)
+    if len(freqs) == 0:
+        return {"error": "Empty frequency data", "traces": list(trace_names)}
+
+    try:
+        data = raw.get_trace(output_trace).get_wave(0)
+    except KeyError:
+        return {
+            "error": f"Trace '{output_trace}' not found in raw file",
+            "traces": list(trace_names),
+        }
+
+    abs_data = np.abs(data)
+    abs_data, w = _sanitize_array(abs_data, "magnitude")
+    warnings.extend(w)
+
+    mag_db = 20 * np.log10(abs_data + 1e-20)
 
     gain_dc_db = float(mag_db[0])
     target = gain_dc_db + threshold_db
@@ -248,12 +442,18 @@ def read_ac_bandwidth(raw_path: str | Path, threshold_db: float) -> dict:
         else:
             f_cutoff = float(freqs[0])
 
-    return {"f_cutoff_hz": f_cutoff, "rolloff_db_per_decade": rolloff_rate}
+    result = {"f_cutoff_hz": f_cutoff, "rolloff_db_per_decade": rolloff_rate}
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 def parse_results(raw_path: str | Path) -> dict:
     """Detect analysis type and parse results accordingly."""
-    analysis = detect_analysis_type(raw_path)
+    try:
+        analysis = detect_analysis_type(raw_path)
+    except Exception as exc:
+        return {"error": f"Failed to detect analysis type: {exc}"}
 
     if "AC" in analysis:
         return parse_ac(raw_path)
@@ -262,4 +462,4 @@ def parse_results(raw_path: str | Path) -> dict:
     elif "Operating Point" in analysis:
         return parse_dc_op(raw_path)
     else:
-        raise ValueError(f"Unknown analysis type: {analysis}")
+        return {"error": f"Unknown analysis type: {analysis}"}

@@ -274,7 +274,11 @@ def run_single_sim(netlist: str, analysis_cmd: str) -> dict | None:
                 logger.debug("Monte Carlo sim returned no output")
                 return None
             raw_path = tmpdir_path / "circuit.raw"
-            return parse_results(raw_path)
+            result = parse_results(raw_path)
+            if "error" in result:
+                logger.debug("Parse returned error: %s", result["error"])
+                return None
+            return result
         except (RuntimeError, OSError, ValueError) as exc:
             logger.debug("Monte Carlo sim failed: %s", exc)
             return None
