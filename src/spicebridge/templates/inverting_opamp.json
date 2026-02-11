@@ -11,5 +11,6 @@
   "components": {
     "Rin": {"description": "Input resistor", "default": "10k"},
     "Rf": {"description": "Feedback resistor", "default": "100k"}
-  }
+  },
+  "ports": {"in": "in", "out": "out", "gnd": "0"}
 }

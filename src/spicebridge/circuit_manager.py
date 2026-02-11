@@ -16,6 +16,7 @@ class CircuitState:
     netlist: str
     output_dir: Path
     last_results: dict | None = field(default=None)
+    ports: dict[str, str] | None = field(default=None)
 
 
 class CircuitManager:
@@ -48,3 +49,11 @@ class CircuitManager:
     def update_netlist(self, circuit_id: str, netlist: str) -> None:
         """Replace the stored netlist for a circuit."""
         self.get(circuit_id).netlist = netlist
+
+    def set_ports(self, circuit_id: str, ports: dict[str, str]) -> None:
+        """Store port definitions for a circuit."""
+        self.get(circuit_id).ports = ports
+
+    def get_ports(self, circuit_id: str) -> dict[str, str] | None:
+        """Return port definitions for a circuit, or None if not set."""
+        return self.get(circuit_id).ports

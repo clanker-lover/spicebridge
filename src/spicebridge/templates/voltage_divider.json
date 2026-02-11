@@ -11,5 +11,6 @@
     "R1": {"description": "Upper resistor (input to output)", "default": "10k"},
     "R2": {"description": "Lower resistor (output to ground)", "default": "10k"},
     "VIN": {"description": "Input voltage", "default": "10"}
-  }
+  },
+  "ports": {"in": "in", "out": "out", "gnd": "0"}
 }

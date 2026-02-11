@@ -14,5 +14,6 @@
     "R_half": {"description": "Capacitive T-network shunt resistor (R/2)", "default": "5k"},
     "C": {"description": "Capacitive T-network capacitor", "default": "10n"},
     "C_dbl": {"description": "Resistive T-network shunt capacitor (2C)", "default": "20n"}
-  }
+  },
+  "ports": {"in": "in", "out": "out", "gnd": "0"}
 }

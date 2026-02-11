@@ -21,6 +21,7 @@ class Template:
     netlist: str
     components: dict[str, dict]
     source: str  # "built-in" or "user"
+    ports: dict[str, str] | None = None
 
 
 class TemplateManager:
@@ -51,6 +52,7 @@ class TemplateManager:
                 netlist=data["netlist"],
                 components=data.get("components", {}),
                 source=source,
+                ports=data.get("ports"),
             )
         except Exception:
             return None

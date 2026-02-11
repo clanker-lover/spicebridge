@@ -17,5 +17,6 @@
     "R5": {"description": "Difference stage input resistor 2", "default": "10k"},
     "R6": {"description": "Difference stage ground resistor", "default": "10k"},
     "Rg": {"description": "Gain-setting resistor", "default": "10k"}
-  }
+  },
+  "ports": {"inp1": "inp1", "inp2": "inp2", "out": "out", "gnd": "0"}
 }

@@ -14,5 +14,6 @@
     "R2": {"description": "Feedback resistor", "default": "10k"},
     "R3": {"description": "Non-inverting input resistor", "default": "10k"},
     "R4": {"description": "Non-inverting ground resistor", "default": "10k"}
-  }
+  },
+  "ports": {"inp1": "inp1", "inp2": "inp2", "out": "out", "gnd": "0"}
 }

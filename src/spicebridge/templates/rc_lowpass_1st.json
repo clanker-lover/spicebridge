@@ -11,5 +11,6 @@
   "components": {
     "R1": {"description": "Series resistor", "default": "10k"},
     "C1": {"description": "Shunt capacitor", "default": "10n"}
-  }
+  },
+  "ports": {"in": "in", "out": "out", "gnd": "0"}
 }

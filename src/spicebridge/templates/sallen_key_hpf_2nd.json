@@ -14,5 +14,6 @@
     "R2": {"description": "Shunt resistor", "default": "10k"},
     "C1": {"description": "First series capacitor", "default": "20n"},
     "C2": {"description": "Second series capacitor", "default": "10n"}
-  }
+  },
+  "ports": {"in": "in", "out": "out", "gnd": "0"}
 }

@@ -7,6 +7,7 @@ import re
 from mcp.server.fastmcp import FastMCP
 
 from spicebridge.circuit_manager import CircuitManager
+from spicebridge.composer import auto_detect_ports, compose_stages
 from spicebridge.kicad_export import export_kicad_schematic as _export_kicad
 from spicebridge.model_generator import generate_model
 from spicebridge.model_store import ModelStore
@@ -90,6 +91,12 @@ def create_circuit(netlist: str, models: list[str] | None = None) -> dict:
             return {"status": "error", "error": str(e)}
         netlist = includes + "\n" + netlist
     circuit_id = _manager.create(netlist)
+    try:
+        detected = auto_detect_ports(netlist)
+        if detected:
+            _manager.set_ports(circuit_id, detected)
+    except Exception:
+        pass  # non-fatal
     preview_lines = netlist.strip().splitlines()[:5]
     return {
         "status": "ok",
@@ -237,6 +244,103 @@ def export_kicad(circuit_id: str, filename: str | None = None) -> dict:
 
 
 @mcp.tool()
+def set_ports(circuit_id: str, ports: dict) -> dict:
+    """Store port definitions for a circuit.
+
+    *ports* maps port names to netlist node names,
+    e.g. ``{"in": "in", "out": "out", "gnd": "0"}``.
+    """
+    try:
+        _manager.get(circuit_id)
+    except KeyError as e:
+        return {"status": "error", "error": str(e)}
+
+    _manager.set_ports(circuit_id, ports)
+    return {"status": "ok", "circuit_id": circuit_id, "ports": ports}
+
+
+@mcp.tool()
+def get_ports(circuit_id: str) -> dict:
+    """Return port definitions for a circuit, auto-detecting if none are set."""
+    try:
+        circuit = _manager.get(circuit_id)
+    except KeyError as e:
+        return {"status": "error", "error": str(e)}
+
+    ports = _manager.get_ports(circuit_id)
+    if ports is None:
+        try:
+            ports = auto_detect_ports(circuit.netlist)
+        except Exception:
+            ports = {}
+    return {"status": "ok", "circuit_id": circuit_id, "ports": ports}
+
+
+@mcp.tool()
+def connect_stages(
+    stages: list[dict],
+    connections: list[dict] | None = None,
+    shared_ports: list[str] | None = None,
+) -> dict:
+    """Compose multiple circuit stages into a single combined circuit.
+
+    Each element of *stages* is ``{"circuit_id": str, "label": str (optional)}``.
+    If *connections* is omitted, stages are auto-wired in order
+    (out of stage N → in of stage N+1).
+    *shared_ports* defaults to ``["gnd"]`` — those nodes are never prefixed.
+    """
+    resolved: list[dict] = []
+    for i, s in enumerate(stages):
+        cid = s.get("circuit_id")
+        if not cid:
+            return {
+                "status": "error",
+                "error": f"Stage {i} missing 'circuit_id'",
+            }
+        try:
+            circuit = _manager.get(cid)
+        except KeyError as e:
+            return {"status": "error", "error": str(e)}
+
+        ports = _manager.get_ports(cid)
+        if ports is None:
+            try:
+                ports = auto_detect_ports(circuit.netlist)
+            except Exception:
+                ports = {}
+        if not ports:
+            return {
+                "status": "error",
+                "error": f"Stage {i} (circuit '{cid}') has no ports",
+            }
+
+        resolved.append(
+            {
+                "netlist": circuit.netlist,
+                "ports": ports,
+                "label": s.get("label", ""),
+            }
+        )
+
+    try:
+        result = compose_stages(resolved, connections, shared_ports)
+    except (ValueError, KeyError) as e:
+        return {"status": "error", "error": str(e)}
+
+    new_id = _manager.create(result["netlist"])
+    _manager.set_ports(new_id, result["ports"])
+
+    preview = result["netlist"].strip().splitlines()[:10]
+    return {
+        "status": "ok",
+        "circuit_id": new_id,
+        "num_stages": len(stages),
+        "stages": result["stages"],
+        "netlist_preview": preview,
+    }
+
+
+@mcp.tool()
 def list_templates(category: str | None = None) -> dict:
     """List available circuit templates, optionally filtered by category."""
     templates = _templates.list_templates(category=category)
@@ -306,6 +410,16 @@ def load_template(
         netlist = includes + "\n" + netlist
 
     circuit_id = _manager.create(netlist)
+    # Store ports from template or auto-detect
+    if t.ports:
+        _manager.set_ports(circuit_id, t.ports)
+    else:
+        try:
+            detected = auto_detect_ports(netlist)
+            if detected:
+                _manager.set_ports(circuit_id, detected)
+        except Exception:
+            pass  # non-fatal
     preview_lines = netlist.strip().splitlines()[:5]
     result = {
         "status": "ok",

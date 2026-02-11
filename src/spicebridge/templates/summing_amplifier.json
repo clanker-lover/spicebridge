@@ -13,5 +13,6 @@
     "R2": {"description": "Input 2 resistor", "default": "10k"},
     "R3": {"description": "Input 3 resistor", "default": "10k"},
     "Rf": {"description": "Feedback resistor", "default": "10k"}
-  }
+  },
+  "ports": {"in1": "in1", "in2": "in2", "in3": "in3", "out": "out", "gnd": "0"}
 }
