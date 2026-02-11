@@ -1,0 +1,18 @@
+{
+  "id": "sallen_key_lowpass_2nd",
+  "name": "2nd-Order Sallen-Key Low-Pass Filter",
+  "category": "filters",
+  "description": "Active second-order Sallen-Key low-pass filter using a unity-gain opamp buffer. Provides -40 dB/decade rolloff with Butterworth response when component values are chosen appropriately.",
+  "design_equations": [
+    "f_c = 1 / (2 * pi * sqrt(R1 * R2 * C1 * C2))",
+    "Q = sqrt(R1 * R2 * C1 * C2) / (C2 * (R1 + R2))",
+    "Butterworth (Q=0.707): set R1=R2=R, C1=2*C2"
+  ],
+  "netlist": "* 2nd-Order Sallen-Key Low-Pass Filter\n.param R1=10k\n.param R2=10k\n.param C1=10n\n.param C2=20n\n.subckt ideal_opamp inp inn out\nE1 out 0 inp inn 100k\n.ends ideal_opamp\nV1 in 0 dc 0 ac 1\nR1 in n1 {R1}\nR2 n1 n2 {R2}\nC1 n1 out {C1}\nC2 n2 0 {C2}\nX1 out n2 out ideal_opamp",
+  "components": {
+    "R1": {"description": "First series resistor", "default": "10k"},
+    "R2": {"description": "Second series resistor", "default": "10k"},
+    "C1": {"description": "Feedback capacitor", "default": "10n"},
+    "C2": {"description": "Shunt capacitor", "default": "20n"}
+  }
+}

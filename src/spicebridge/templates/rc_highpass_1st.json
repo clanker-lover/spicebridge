@@ -1,0 +1,15 @@
+{
+  "id": "rc_highpass_1st",
+  "name": "1st-Order RC High-Pass Filter",
+  "category": "filters",
+  "description": "Passive first-order RC high-pass filter. Passes frequencies above the cutoff and attenuates lower frequencies at +20 dB/decade.",
+  "design_equations": [
+    "f_c = 1 / (2 * pi * R1 * C1)",
+    "At f_c the gain is -3 dB and phase is +45 degrees"
+  ],
+  "netlist": "* 1st-Order RC High-Pass Filter\n.param R1=10k\n.param C1=10n\nV1 in 0 dc 0 ac 1\nC1 in mid {C1}\nR1 mid 0 {R1}\nR2 mid out 0.001\nC2 out 0 1T",
+  "components": {
+    "R1": {"description": "Shunt resistor", "default": "10k"},
+    "C1": {"description": "Series capacitor", "default": "10n"}
+  }
+}

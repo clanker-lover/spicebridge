@@ -1,0 +1,139 @@
+"""Integration tests for template-related MCP tools in spicebridge.server."""
+
+from spicebridge.server import (
+    create_circuit,
+    list_templates,
+    load_template,
+    modify_component,
+    run_ac_analysis,
+    run_dc_op,
+    validate_netlist,
+)
+
+# --- list_templates ---
+
+
+def test_list_templates_all():
+    result = list_templates()
+    assert result["status"] == "ok"
+    assert result["count"] >= 5
+    ids = [t["id"] for t in result["templates"]]
+    assert "rc_lowpass_1st" in ids
+    assert "voltage_divider" in ids
+
+
+def test_list_templates_filter_category():
+    result = list_templates(category="filters")
+    assert result["status"] == "ok"
+    assert result["count"] == 3
+    assert all(t["category"] == "filters" for t in result["templates"])
+
+
+# --- load_template ---
+
+
+def test_load_template_default_params():
+    result = load_template("rc_lowpass_1st")
+    assert result["status"] == "ok"
+    assert len(result["circuit_id"]) == 8
+    assert "R1" in result["components"]
+    assert len(result["design_equations"]) > 0
+    # Default .param R1=10k should be in the preview
+    assert any("R1=10k" in line for line in result["preview"])
+
+
+def test_load_template_custom_params():
+    result = load_template("rc_lowpass_1st", params={"R1": "22k"})
+    assert result["status"] == "ok"
+    assert any("R1=22k" in line for line in result["preview"])
+
+
+def test_load_template_invalid_id():
+    result = load_template("nonexistent")
+    assert result["status"] == "error"
+    assert "not found" in result["error"]
+
+
+def test_load_template_then_simulate_ac():
+    """Load rc_lowpass_1st and run AC analysis end-to-end."""
+    loaded = load_template("rc_lowpass_1st")
+    assert loaded["status"] == "ok"
+    cid = loaded["circuit_id"]
+
+    ac = run_ac_analysis(cid, start_freq=1.0, stop_freq=1e6, points_per_decade=10)
+    assert ac["status"] == "ok"
+    assert "f_3dB_hz" in ac["results"]
+    # Default R1=10k, C1=10n -> f_c ~ 1592 Hz
+    assert abs(ac["results"]["f_3dB_hz"] - 1592) < 200
+
+
+# --- modify_component ---
+
+
+def test_modify_component_updates_netlist():
+    loaded = load_template("voltage_divider")
+    cid = loaded["circuit_id"]
+
+    result = modify_component(cid, "R2", "20k")
+    assert result["status"] == "ok"
+    assert result["circuit_id"] == cid
+    # The preview should show the updated param
+    assert any("R2=20k" in line for line in result["preview"])
+
+
+def test_modify_component_invalid_circuit():
+    result = modify_component("deadbeef", "R1", "1k")
+    assert result["status"] == "error"
+    assert "not found" in result["error"]
+
+
+def test_modify_component_not_found():
+    loaded = load_template("voltage_divider")
+    cid = loaded["circuit_id"]
+
+    result = modify_component(cid, "C99", "100n")
+    assert result["status"] == "error"
+    assert "not found" in result["error"]
+
+
+def test_modify_component_then_simulate_dc():
+    """Load voltage_divider, change R2 to 30k, and run DC OP."""
+    loaded = load_template("voltage_divider")
+    cid = loaded["circuit_id"]
+
+    modify_component(cid, "R2", "30k")
+
+    dc = run_dc_op(cid)
+    assert dc["status"] == "ok"
+    # V_out = 10 * 30k / (10k + 30k) = 7.5 V
+    assert abs(dc["results"]["nodes"]["v(out)"] - 7.5) < 0.1
+
+
+# --- validate_netlist ---
+
+
+def test_validate_valid_circuit():
+    loaded = load_template("voltage_divider")
+    cid = loaded["circuit_id"]
+
+    result = validate_netlist(cid)
+    assert result["status"] == "ok"
+    assert result["valid"] is True
+    assert result["errors"] == []
+
+
+def test_validate_broken_netlist():
+    """A netlist with garbage should fail validation."""
+    created = create_circuit("THIS IS NOT A VALID NETLIST\nXYZ123 GARBAGE")
+    cid = created["circuit_id"]
+
+    result = validate_netlist(cid)
+    assert result["status"] == "ok"
+    assert result["valid"] is False
+    assert len(result["errors"]) > 0
+
+
+def test_validate_invalid_circuit_id():
+    result = validate_netlist("deadbeef")
+    assert result["status"] == "error"
+    assert "not found" in result["error"]

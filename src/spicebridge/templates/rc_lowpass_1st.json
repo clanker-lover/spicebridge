@@ -1,0 +1,15 @@
+{
+  "id": "rc_lowpass_1st",
+  "name": "1st-Order RC Low-Pass Filter",
+  "category": "filters",
+  "description": "Passive first-order RC low-pass filter. Passes frequencies below the cutoff and attenuates higher frequencies at -20 dB/decade.",
+  "design_equations": [
+    "f_c = 1 / (2 * pi * R1 * C1)",
+    "At f_c the gain is -3 dB and phase is -45 degrees"
+  ],
+  "netlist": "* 1st-Order RC Low-Pass Filter\n.param R1=10k\n.param C1=10n\nV1 in 0 dc 0 ac 1\nR1 in out {R1}\nC1 out 0 {C1}",
+  "components": {
+    "R1": {"description": "Series resistor", "default": "10k"},
+    "C1": {"description": "Shunt capacitor", "default": "10n"}
+  }
+}

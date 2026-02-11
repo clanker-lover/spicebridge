@@ -25,6 +25,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+spicebridge = ["templates/*.json"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py310"

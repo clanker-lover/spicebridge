@@ -175,6 +175,82 @@ def parse_dc_op(raw_path: str | Path) -> dict:
     }
 
 
+def read_ac_at_frequency(raw_path: str | Path, frequency_hz: float) -> dict:
+    """Read AC analysis .raw file and interpolate gain/phase at a specific frequency.
+
+    Returns {"gain_db": float, "phase_deg": float}.
+    Raises ValueError if frequency is outside the simulated range.
+    """
+    raw = RawRead(str(raw_path), dialect="ngspice")
+    trace_names = raw.get_trace_names()
+    output_trace = _select_output_trace(trace_names)
+
+    freq_data = raw.get_trace("frequency").get_wave(0)
+    freqs = np.real(freq_data)
+
+    if frequency_hz < freqs[0] or frequency_hz > freqs[-1]:
+        raise ValueError(
+            f"Frequency {frequency_hz} Hz is outside simulated range "
+            f"[{float(freqs[0])}, {float(freqs[-1])}] Hz"
+        )
+
+    data = raw.get_trace(output_trace).get_wave(0)
+    mag_db = 20 * np.log10(np.abs(data) + 1e-20)
+    phase = np.angle(data, deg=True)
+
+    gain_db = float(np.interp(frequency_hz, freqs, mag_db))
+    phase_deg = float(np.interp(frequency_hz, freqs, phase))
+
+    return {"gain_db": gain_db, "phase_deg": phase_deg}
+
+
+def read_ac_bandwidth(raw_path: str | Path, threshold_db: float) -> dict:
+    """Read AC analysis .raw file and find cutoff at an arbitrary threshold.
+
+    threshold_db should be negative (e.g., -6). The target level is
+    gain_dc_db + threshold_db.
+
+    Returns {"f_cutoff_hz": float|None, "rolloff_db_per_decade": float|None}.
+    """
+    raw = RawRead(str(raw_path), dialect="ngspice")
+    trace_names = raw.get_trace_names()
+    output_trace = _select_output_trace(trace_names)
+
+    freq_data = raw.get_trace("frequency").get_wave(0)
+    freqs = np.real(freq_data)
+
+    data = raw.get_trace(output_trace).get_wave(0)
+    mag_db = 20 * np.log10(np.abs(data) + 1e-20)
+
+    gain_dc_db = float(mag_db[0])
+    target = gain_dc_db + threshold_db
+
+    f_cutoff = None
+    rolloff_rate = None
+
+    below = np.where(mag_db < target)[0]
+    if len(below) > 0:
+        idx = below[0]
+        if idx > 0:
+            f_cutoff = float(
+                np.interp(
+                    target,
+                    [mag_db[idx], mag_db[idx - 1]],
+                    [freqs[idx], freqs[idx - 1]],
+                )
+            )
+            f_decade = f_cutoff * 10
+            if f_decade <= freqs[-1]:
+                gain_at_decade = float(np.interp(f_decade, freqs, mag_db))
+                rolloff_rate = gain_at_decade - float(
+                    np.interp(f_cutoff, freqs, mag_db)
+                )
+        else:
+            f_cutoff = float(freqs[0])
+
+    return {"f_cutoff_hz": f_cutoff, "rolloff_db_per_decade": rolloff_rate}
+
+
 def parse_results(raw_path: str | Path) -> dict:
     """Detect analysis type and parse results accordingly."""
     analysis = detect_analysis_type(raw_path)

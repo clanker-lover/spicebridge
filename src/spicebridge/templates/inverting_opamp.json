@@ -1,0 +1,15 @@
+{
+  "id": "inverting_opamp",
+  "name": "Inverting Op-Amp Amplifier",
+  "category": "amplifiers",
+  "description": "Classic inverting amplifier configuration using an ideal opamp. Gain is set by the ratio of feedback to input resistor.",
+  "design_equations": [
+    "A_v = -Rf / Rin",
+    "Input impedance = Rin"
+  ],
+  "netlist": "* Inverting Op-Amp Amplifier\n.param Rin=10k\n.param Rf=100k\n.subckt ideal_opamp inp inn out\nE1 out 0 inp inn 100k\n.ends ideal_opamp\nV1 in 0 dc 0 ac 1\nRin in vminus {Rin}\nRf vminus out {Rf}\nX1 0 vminus out ideal_opamp",
+  "components": {
+    "Rin": {"description": "Input resistor", "default": "10k"},
+    "Rf": {"description": "Feedback resistor", "default": "100k"}
+  }
+}

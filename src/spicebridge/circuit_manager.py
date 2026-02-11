@@ -44,3 +44,7 @@ class CircuitManager:
     def update_results(self, circuit_id: str, results: dict) -> None:
         """Store simulation results for a circuit."""
         self.get(circuit_id).last_results = results
+
+    def update_netlist(self, circuit_id: str, netlist: str) -> None:
+        """Replace the stored netlist for a circuit."""
+        self.get(circuit_id).netlist = netlist

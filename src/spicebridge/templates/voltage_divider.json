@@ -1,0 +1,15 @@
+{
+  "id": "voltage_divider",
+  "name": "Resistive Voltage Divider",
+  "category": "basic",
+  "description": "Simple two-resistor voltage divider. Output voltage is a fraction of the input determined by the resistor ratio.",
+  "design_equations": [
+    "V_out = V_in * R2 / (R1 + R2)"
+  ],
+  "netlist": "* Resistive Voltage Divider\n.param R1=10k\n.param R2=10k\n.param VIN=10\nV1 in 0 dc {VIN}\nR1 in out {R1}\nR2 out 0 {R2}",
+  "components": {
+    "R1": {"description": "Upper resistor (input to output)", "default": "10k"},
+    "R2": {"description": "Lower resistor (output to ground)", "default": "10k"},
+    "VIN": {"description": "Input voltage", "default": "10"}
+  }
+}

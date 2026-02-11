@@ -84,3 +84,42 @@ def run_simulation(netlist: str, output_dir: str | Path | None = None) -> bool:
     if _run_via_spicelib(netlist_file, raw_file):
         return True
     return _run_via_subprocess(netlist_file, raw_file)
+
+
+def validate_netlist_syntax(netlist: str) -> tuple[bool, list[str]]:
+    """Check a netlist for syntax errors by running ngspice in batch mode.
+
+    Returns
+    -------
+    tuple[bool, list[str]]
+        (is_valid, error_messages) — *is_valid* is True when ngspice
+        reports no errors; *error_messages* collects lines containing
+        "error" or "fatal".
+    """
+    if not _check_ngspice():
+        raise RuntimeError(
+            "ngspice is not installed or not on PATH. "
+            "Install it with: sudo apt install ngspice"
+        )
+
+    tmp = Path(tempfile.mkdtemp(prefix="spicebridge_validate_"))
+    netlist_file = tmp / "check.net"
+    netlist_file.write_text(netlist)
+
+    try:
+        result = subprocess.run(
+            ["ngspice", "-b", str(netlist_file)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        return False, ["ngspice timed out"]
+
+    errors: list[str] = []
+    for line in (result.stdout + "\n" + result.stderr).splitlines():
+        lower = line.lower()
+        if "error" in lower or "fatal" in lower:
+            errors.append(line.strip())
+
+    return (len(errors) == 0, errors)
