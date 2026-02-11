@@ -7,6 +7,8 @@ import re
 from mcp.server.fastmcp import FastMCP
 
 from spicebridge.circuit_manager import CircuitManager
+from spicebridge.model_generator import generate_model
+from spicebridge.model_store import ModelStore
 from spicebridge.parser import (
     parse_results,
     read_ac_at_frequency,
@@ -25,6 +27,7 @@ from spicebridge.template_manager import (
 mcp = FastMCP("SPICEBridge")
 _manager = CircuitManager()
 _templates = TemplateManager()
+_models = ModelStore()
 
 # Patterns for analysis commands to strip (case-insensitive)
 _ANALYSIS_RE = re.compile(r"^\s*\.(ac|tran|op|dc)\b", re.IGNORECASE)
@@ -771,6 +774,45 @@ def auto_design(
     result["status"] = "ok"
 
     return result
+
+
+@mcp.tool()
+def create_model(
+    component_type: str,
+    name: str,
+    parameters: dict | None = None,
+) -> dict:
+    """Generate a SPICE .lib model file from datasheet parameters.
+
+    component_type: "opamp", "bjt", "mosfet", "diode"
+    name: model name (e.g. "OPA2134")
+    parameters: type-specific datasheet values; omitted keys use defaults.
+    """
+    try:
+        model = generate_model(component_type, name, parameters)
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
+
+    lib_path = _models.save(model)
+    return {
+        "status": "ok",
+        "model_name": model.name,
+        "component_type": model.component_type,
+        "file_path": str(lib_path),
+        "include_statement": f".include {lib_path}",
+        "model_text": model.spice_text,
+        "parameters_used": model.parameters,
+        "notes": model.notes,
+    }
+
+
+@mcp.tool()
+def list_models() -> dict:
+    """Return all saved SPICE models from the model library."""
+    return {
+        "status": "ok",
+        "models": _models.list_models(),
+    }
 
 
 def configure_for_remote() -> None:

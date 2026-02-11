@@ -2,6 +2,8 @@
 
 __version__ = "0.1.0"
 
+from spicebridge.model_generator import GeneratedModel, generate_model
+from spicebridge.model_store import ModelStore
 from spicebridge.parser import parse_results, read_ac_at_frequency, read_ac_bandwidth
 from spicebridge.schematic import draw_schematic, parse_netlist
 from spicebridge.simulator import run_simulation
@@ -15,4 +17,7 @@ __all__ = [
     "parse_netlist",
     "draw_schematic",
     "TemplateManager",
+    "generate_model",
+    "GeneratedModel",
+    "ModelStore",
 ]
