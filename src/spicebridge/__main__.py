@@ -76,7 +76,17 @@ def main() -> None:
     os.environ["FASTMCP_HOST"] = args.host
     os.environ["FASTMCP_PORT"] = str(args.port)
 
-    from spicebridge.server import configure_for_remote, mcp
+    import atexit
+    import signal
+
+    from spicebridge.server import _metrics, configure_for_remote, mcp
+
+    def _shutdown_handler(signum, frame):
+        _metrics.shutdown()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown_handler)
+    atexit.register(_metrics.shutdown)
 
     if args.transport != "stdio":
         configure_for_remote()

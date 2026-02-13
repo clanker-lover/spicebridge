@@ -105,6 +105,11 @@ class CircuitManager:
                 for cid, state in self._circuits.items()
             ]
 
+    def circuit_count(self) -> int:
+        """Return the number of currently stored circuits."""
+        with self._lock:
+            return len(self._circuits)
+
     def delete(self, circuit_id: str) -> None:
         """Remove a circuit and clean up its output directory."""
         with self._lock:

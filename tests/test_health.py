@@ -130,14 +130,14 @@ class TestHealthTokenProtection:
 class TestHealthEndpointShape:
     """Test the actual health endpoint from server.py returns expected keys."""
 
-    def test_snapshot_shape(self):
+    def test_snapshot_shape(self, tmp_path):
         from spicebridge.metrics import ServerMetrics
 
-        m = ServerMetrics(max_rpm=60)
+        m = ServerMetrics(max_rpm=60, persist_path=tmp_path / "m.json")
         m.record_request("test_tool")
         snap = m.snapshot()
 
-        # Verify all expected top-level keys exist
+        # Verify all expected top-level keys exist (original)
         assert "uptime_seconds" in snap
         assert "requests_last_1m" in snap
         assert "requests_last_5m" in snap
@@ -157,6 +157,76 @@ class TestHealthEndpointShape:
         assert "rejected_last_1m" in throttle
         assert "rejected_total" in throttle
         assert "max_rpm" in throttle
+
+    def test_new_top_level_keys(self, tmp_path):
+        from spicebridge.metrics import ServerMetrics
+
+        m = ServerMetrics(max_rpm=60, persist_path=tmp_path / "m.json")
+        m.record_request("test_tool")
+        snap = m.snapshot()
+
+        assert "tool_stats" in snap
+        assert "hourly_history" in snap
+        assert "daily_history" in snap
+        assert "recent_errors" in snap
+        assert "high_water_marks" in snap
+        assert "system" in snap
+        assert "server_start_time" in snap
+        assert "cumulative_uptime_seconds" in snap
+        assert "last_request_timestamp" in snap
+        assert "circuit_count" in snap
+
+    def test_per_tool_stats_shape(self, tmp_path):
+        from spicebridge.metrics import ServerMetrics
+
+        m = ServerMetrics(persist_path=tmp_path / "m.json")
+        m.record_request("test_tool")
+        m.record_success("test_tool", 42.0)
+        snap = m.snapshot()
+
+        ts = snap["tool_stats"]["test_tool"]
+        assert "calls" in ts
+        assert "successes" in ts
+        assert "errors" in ts
+        assert "avg_latency_ms" in ts
+        assert "last_called" in ts
+
+    def test_bucket_shape(self, tmp_path):
+        from spicebridge.metrics import ServerMetrics
+
+        m = ServerMetrics(persist_path=tmp_path / "m.json")
+        m.record_request("x")
+        snap = m.snapshot()
+
+        for bucket in snap["hourly_history"]:
+            assert "total" in bucket
+            assert "errors" in bucket
+            assert "avg_latency_ms" in bucket
+
+        for bucket in snap["daily_history"]:
+            assert "total" in bucket
+            assert "errors" in bucket
+            assert "avg_latency_ms" in bucket
+
+    def test_array_lengths(self, tmp_path):
+        from spicebridge.metrics import ServerMetrics
+
+        m = ServerMetrics(persist_path=tmp_path / "m.json")
+        snap = m.snapshot()
+
+        assert len(snap["hourly_history"]) == 24
+        assert len(snap["daily_history"]) == 7
+
+    def test_high_water_marks_shape(self, tmp_path):
+        from spicebridge.metrics import ServerMetrics
+
+        m = ServerMetrics(persist_path=tmp_path / "m.json")
+        snap = m.snapshot()
+
+        hwm = snap["high_water_marks"]
+        assert "peak_concurrent_sims" in hwm
+        assert "peak_rpm" in hwm
+        assert "peak_requests_per_hour" in hwm
 
     def test_cache_stats_shape(self):
         from spicebridge.schematic_cache import SchematicCache

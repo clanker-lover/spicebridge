@@ -90,6 +90,8 @@ _schematic_cache = SchematicCache()
 
 _MAX_RPM = int(os.environ.get("SPICEBRIDGE_MAX_RPM", "60"))
 _metrics = ServerMetrics(max_rpm=_MAX_RPM)
+_metrics.set_circuit_counter(lambda: _manager.circuit_count())
+_metrics.start_persistence()
 
 # Tools whose return type is list[TextContent] (need special error format)
 _LIST_RETURN_TOOLS = frozenset({"draw_schematic", "auto_design"})
@@ -115,6 +117,7 @@ def _monitored(fn):
         _metrics.record_request(name)
         if _http_transport and not _metrics.check_rpm():
             _metrics.record_rejection()
+            _metrics.record_error(name, 0.0, "Rate limit exceeded")
             logger.info("tool=%s rejected=rpm_exceeded", name)
             err = {
                 "status": "error",
@@ -125,17 +128,29 @@ def _monitored(fn):
             return err
         t0 = time.monotonic()
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
+            duration_ms = (time.monotonic() - t0) * 1000
+            logger.info("tool=%s duration=%.0fms", name, duration_ms)
+            # Check if result indicates an error
+            if isinstance(result, dict) and result.get("status") == "error":
+                _metrics.record_error(name, duration_ms, result.get("error", "unknown"))
+            else:
+                _metrics.record_success(name, duration_ms)
+            return result
         except SimulationQueueFull as e:
+            duration_ms = (time.monotonic() - t0) * 1000
             _metrics.record_rejection()
-            logger.info("tool=%s rejected=queue_full", name)
+            _metrics.record_error(name, duration_ms, str(e))
+            logger.info("tool=%s rejected=queue_full duration=%.0fms", name, duration_ms)
             err = {"status": "error", "error": str(e)}
             if name in _LIST_RETURN_TOOLS:
                 return _error_content(err)
             return err
-        finally:
+        except Exception as e:
             duration_ms = (time.monotonic() - t0) * 1000
-            logger.info("tool=%s duration=%.0fms", name, duration_ms)
+            _metrics.record_error(name, duration_ms, str(e))
+            logger.info("tool=%s error duration=%.0fms", name, duration_ms)
+            raise
 
     return wrapper
 
@@ -276,7 +291,7 @@ async def health_endpoint(request):
     data["schematic_cache"] = _schematic_cache.stats()
     data["sim_queue_depth"] = _gsqd()
     return Response(
-        content=json.dumps(data),
+        content=json.dumps(data, default=str),
         status_code=200,
         media_type="application/json",
     )
