@@ -92,6 +92,8 @@ def main() -> None:
                 "No API key configured — MCP server is unauthenticated. "
                 "Set SPICEBRIDGE_API_KEY to enable authentication."
             )
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
         mcp.run(transport=args.transport)
 
 
