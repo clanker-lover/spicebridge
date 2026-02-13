@@ -19,6 +19,7 @@ from spicebridge.setup_wizard import (
     _generate_config_yml,
     _install_cloudflared_instructions,
     _named_tunnel_flow,
+    _offer_install_cloudflared,
     _parse_simple_yaml,
     _prompt_choice,
     _prompt_string,
@@ -26,7 +27,9 @@ from spicebridge.setup_wizard import (
     _run_processes,
     _start_tunnel_quick,
     _validate_hostname,
+    _validate_tunnel_id,
     _validate_tunnel_name,
+    _wait_for_server,
     _write_config_yml,
     run_wizard,
 )
@@ -105,22 +108,52 @@ class TestDetectOs:
 
 
 class TestGenerateConfigYml:
-    def test_basic_config(self):
-        result = _generate_config_yml(
-            "abc-123",
-            "/home/user/.cloudflared/abc-123.json",
-            "spice.example.com",
-            8000,
-        )
-        assert "tunnel: abc-123" in result
-        assert "credentials-file: /home/user/.cloudflared/abc-123.json" in result
+    def test_basic_config(self, tmp_path):
+        config_dir = tmp_path / ".cloudflared"
+        config_dir.mkdir()
+        creds = str(config_dir / "abc123.json")
+        with patch("spicebridge.setup_wizard._CLOUDFLARED_CONFIG_DIR", config_dir):
+            result = _generate_config_yml(
+                "abc123",
+                creds,
+                "spice.example.com",
+                8000,
+            )
+        assert "tunnel: abc123" in result
+        assert f"credentials-file: {creds}" in result
         assert "hostname: spice.example.com" in result
         assert "service: http://127.0.0.1:8000" in result
         assert "http_status:404" in result
 
-    def test_custom_port(self):
-        result = _generate_config_yml("x", "y", "z", 9999)
-        assert "service: http://127.0.0.1:9999" in result
+    def test_custom_port(self, tmp_path):
+        config_dir = tmp_path / ".cloudflared"
+        config_dir.mkdir()
+        creds = str(config_dir / "aabbccdd.json")
+        with patch("spicebridge.setup_wizard._CLOUDFLARED_CONFIG_DIR", config_dir):
+            result = _generate_config_yml(
+                "aabbccdd", creds, "z.example.com", 9999, host="10.0.0.1"
+            )
+        assert "service: http://10.0.0.1:9999" in result
+
+    def test_invalid_tunnel_id_raises(self, tmp_path):
+        config_dir = tmp_path / ".cloudflared"
+        config_dir.mkdir()
+        creds = str(config_dir / "bad.json")
+        with (
+            patch("spicebridge.setup_wizard._CLOUDFLARED_CONFIG_DIR", config_dir),
+            pytest.raises(ValueError, match="Invalid tunnel ID"),
+        ):
+            _generate_config_yml("INVALID!", creds, "a.example.com", 8000)
+
+    def test_invalid_hostname_raises(self, tmp_path):
+        config_dir = tmp_path / ".cloudflared"
+        config_dir.mkdir()
+        creds = str(config_dir / "aabb.json")
+        with (
+            patch("spicebridge.setup_wizard._CLOUDFLARED_CONFIG_DIR", config_dir),
+            pytest.raises(ValueError, match="Invalid hostname"),
+        ):
+            _generate_config_yml("aabb", creds, "bad host\nname", 8000)
 
 
 class TestParseSimpleYaml:
@@ -287,7 +320,6 @@ class TestRunWizard:
 
         mock_tunnel = MagicMock()
         mock_tunnel.poll.return_value = None
-        mock_tunnel.stderr.readline.return_value = "https://test-abc.trycloudflare.com"
 
         with (
             patch(
@@ -301,14 +333,10 @@ class TestRunWizard:
             patch("spicebridge.setup_wizard._start_server", return_value=mock_server),
             patch("spicebridge.setup_wizard._wait_for_server", return_value=True),
             patch(
-                "spicebridge.setup_wizard.subprocess.Popen", return_value=mock_tunnel
+                "spicebridge.setup_wizard._start_tunnel_quick",
+                return_value=(mock_tunnel, "https://test-abc.trycloudflare.com"),
             ),
             patch("spicebridge.setup_wizard._run_processes", return_value=0),
-            patch("spicebridge.setup_wizard.time.monotonic", side_effect=[0, 1, 2]),
-            patch(
-                "spicebridge.setup_wizard.select.select",
-                return_value=([mock_tunnel.stderr], [], []),
-            ),
         ):
             result = run_wizard(["--quick"])
             assert result == 0
@@ -373,15 +401,13 @@ class TestStartTunnelQuick:
         """Extract URL from a normal cloudflared stderr line."""
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
-        mock_proc.stderr.readline.return_value = (
-            "INF +---| https://test-abc.trycloudflare.com |---+"
-        )
-        # select.select returns ready on first call
+        mock_proc.stderr.fileno.return_value = 5
         with (
             patch("spicebridge.setup_wizard.subprocess.Popen", return_value=mock_proc),
+            patch("spicebridge.setup_wizard.fcntl.fcntl", return_value=0),
             patch(
-                "spicebridge.setup_wizard.select.select",
-                return_value=([mock_proc.stderr], [], []),
+                "spicebridge.setup_wizard.os.read",
+                return_value=b"INF +---| https://test-abc.trycloudflare.com |---+\n",
             ),
             patch("spicebridge.setup_wizard.time.monotonic", side_effect=[0, 1]),
         ):
@@ -393,12 +419,13 @@ class TestStartTunnelQuick:
         """Extract URL when only hostname is present (no https://)."""
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
-        mock_proc.stderr.readline.return_value = "test-abc.trycloudflare.com"
+        mock_proc.stderr.fileno.return_value = 5
         with (
             patch("spicebridge.setup_wizard.subprocess.Popen", return_value=mock_proc),
+            patch("spicebridge.setup_wizard.fcntl.fcntl", return_value=0),
             patch(
-                "spicebridge.setup_wizard.select.select",
-                return_value=([mock_proc.stderr], [], []),
+                "spicebridge.setup_wizard.os.read",
+                return_value=b"test-abc.trycloudflare.com\n",
             ),
             patch("spicebridge.setup_wizard.time.monotonic", side_effect=[0, 1]),
         ):
@@ -409,12 +436,13 @@ class TestStartTunnelQuick:
         """Return empty URL when tunnel never prints a URL."""
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
-        mock_proc.stderr.readline.return_value = "some other output\n"
+        mock_proc.stderr.fileno.return_value = 5
         with (
             patch("spicebridge.setup_wizard.subprocess.Popen", return_value=mock_proc),
+            patch("spicebridge.setup_wizard.fcntl.fcntl", return_value=0),
             patch(
-                "spicebridge.setup_wizard.select.select",
-                return_value=([mock_proc.stderr], [], []),
+                "spicebridge.setup_wizard.os.read",
+                return_value=b"some other output\n",
             ),
             patch("spicebridge.setup_wizard.time.monotonic", side_effect=[0, 1, 31]),
         ):
@@ -425,18 +453,40 @@ class TestStartTunnelQuick:
         """Trailing pipe character is stripped from URL."""
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
-        mock_proc.stderr.readline.return_value = "https://test-abc.trycloudflare.com|"
+        mock_proc.stderr.fileno.return_value = 5
         with (
             patch("spicebridge.setup_wizard.subprocess.Popen", return_value=mock_proc),
+            patch("spicebridge.setup_wizard.fcntl.fcntl", return_value=0),
             patch(
-                "spicebridge.setup_wizard.select.select",
-                return_value=([mock_proc.stderr], [], []),
+                "spicebridge.setup_wizard.os.read",
+                return_value=b"https://test-abc.trycloudflare.com|\n",
             ),
             patch("spicebridge.setup_wizard.time.monotonic", side_effect=[0, 1]),
         ):
             proc, url = _start_tunnel_quick(8000)
             assert not url.endswith("|")
             assert "trycloudflare.com" in url
+
+    def test_partial_line_does_not_hang(self):
+        """os.read returns bytes without newline in two chunks, URL still extracted."""
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.stderr.fileno.return_value = 5
+        with (
+            patch("spicebridge.setup_wizard.subprocess.Popen", return_value=mock_proc),
+            patch("spicebridge.setup_wizard.fcntl.fcntl", return_value=0),
+            patch(
+                "spicebridge.setup_wizard.os.read",
+                side_effect=[
+                    b"INF https://test-abc.trycloud",
+                    b"flare.com done",
+                ],
+            ),
+            patch("spicebridge.setup_wizard.time.monotonic", side_effect=[0, 1, 2]),
+        ):
+            proc, url = _start_tunnel_quick(8000)
+            assert "trycloudflare.com" in url
+            assert url.startswith("https://")
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +511,7 @@ class TestRunProcesses:
         assert result == 1
 
     def test_ctrl_c_cleanup(self):
-        """KeyboardInterrupt -> both procs get _kill_proc."""
+        """KeyboardInterrupt -> both procs get _kill_proc and return 130."""
         server = MagicMock()
         # First poll raises KeyboardInterrupt, then returns None for _kill_proc
         server.poll.side_effect = [KeyboardInterrupt, None]
@@ -471,10 +521,23 @@ class TestRunProcesses:
         tunnel.poll.return_value = None
         tunnel.returncode = None
 
-        _run_processes(server, tunnel)
+        result = _run_processes(server, tunnel)
+        assert result == 130
         # Both processes should have terminate called via _kill_proc
         tunnel.terminate.assert_called()
         server.terminate.assert_called()
+
+    def test_returns_130_on_ctrl_c(self):
+        """Explicit test: Ctrl+C returns exit code 130."""
+        server = MagicMock()
+        server.poll.side_effect = [KeyboardInterrupt, None]
+        server.returncode = None
+
+        tunnel = MagicMock()
+        tunnel.poll.return_value = None
+        tunnel.returncode = None
+
+        assert _run_processes(server, tunnel) == 130
 
 
 # ---------------------------------------------------------------------------
@@ -516,12 +579,15 @@ class TestNamedTunnelFlowDelete:
             ) as mock_del,
             patch(
                 "spicebridge.setup_wizard._create_new_tunnel", return_value="new-uuid"
-            ),
+            ) as mock_create,
             patch("spicebridge.setup_wizard._prompt_string", return_value=""),
             patch("spicebridge.setup_wizard._start_named_tunnel", return_value=0),
         ):
             _named_tunnel_flow(args)
             mock_del.assert_called_once_with("tunnel-two")
+            # C3: create should use the deleted tunnel's name, not the default
+            mock_create.assert_called_once()
+            assert mock_create.call_args[0][1] == "tunnel-two"
 
 
 # ---------------------------------------------------------------------------
@@ -730,3 +796,117 @@ class TestExistingConfigUsesTunnel:
             result = _named_tunnel_flow(args)
             assert result == 0
             mock_start.assert_called_once_with(args, "my-tunnel")
+
+
+# ---------------------------------------------------------------------------
+# Test C5: Tunnel ID validation
+# ---------------------------------------------------------------------------
+
+
+class TestValidateTunnelId:
+    @pytest.mark.parametrize(
+        "tunnel_id",
+        [
+            "aabbccdd",
+            "abc123",
+            "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "aa",
+            "0123456789abcdef",
+        ],
+    )
+    def test_valid(self, tunnel_id):
+        assert _validate_tunnel_id(tunnel_id) is True
+
+    @pytest.mark.parametrize(
+        "tunnel_id",
+        [
+            "",
+            "ABCDEF",
+            "abc\n123",
+            "../etc/passwd",
+            "a" * 65,
+            "a",  # single char (regex requires at least 2)
+            "-abc123",
+        ],
+    )
+    def test_invalid(self, tunnel_id):
+        assert _validate_tunnel_id(tunnel_id) is False
+
+
+# ---------------------------------------------------------------------------
+# Test H1: Non-TTY stdin skips install
+# ---------------------------------------------------------------------------
+
+
+class TestOfferInstallCloudflared:
+    def test_non_tty_stdin_skips_install(self):
+        """Non-interactive mode returns False without prompting."""
+        with (
+            patch("spicebridge.setup_wizard._detect_os", return_value="linux-deb"),
+            patch("spicebridge.setup_wizard.sys.stdin") as mock_stdin,
+        ):
+            mock_stdin.isatty.return_value = False
+            result = _offer_install_cloudflared()
+            assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Test H6: Dead server returns False
+# ---------------------------------------------------------------------------
+
+
+class TestWaitForServer:
+    def test_dead_server_returns_false(self):
+        """server_proc.poll() returning non-None -> returns False immediately."""
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 1  # process already exited
+        result = _wait_for_server("127.0.0.1", 8000, server_proc=mock_proc)
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Test H7/M1: File permissions 0o600
+# ---------------------------------------------------------------------------
+
+
+class TestWriteConfigYmlPermissions:
+    def test_file_permissions_0600(self, tmp_path):
+        config_dir = tmp_path / ".cloudflared"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yml"
+        with (
+            patch("spicebridge.setup_wizard._CLOUDFLARED_CONFIG_DIR", config_dir),
+            patch("spicebridge.setup_wizard._CLOUDFLARED_CONFIG_FILE", config_file),
+        ):
+            result = _write_config_yml("tunnel: abc\n")
+            assert result.stat().st_mode & 0o777 == 0o600
+
+
+# ---------------------------------------------------------------------------
+# Test M4: Non-UTF-8 config file
+# ---------------------------------------------------------------------------
+
+
+class TestDetectExistingConfigNonUtf8:
+    def test_non_utf8_file(self, tmp_path):
+        config_file = tmp_path / "config.yml"
+        config_file.write_bytes(b"\x80\x81\x82\xff\xfe")
+        with patch("spicebridge.setup_wizard._CLOUDFLARED_CONFIG_FILE", config_file):
+            assert _detect_existing_config() is None
+
+
+# ---------------------------------------------------------------------------
+# Test M5: Colon in YAML values
+# ---------------------------------------------------------------------------
+
+
+class TestParseSimpleYamlColonInValue:
+    def test_colon_in_value_preserved(self):
+        text = "service: http://127.0.0.1:8000\n"
+        result = _parse_simple_yaml(text)
+        assert result["service"] == "http://127.0.0.1:8000"
+
+    def test_http_status_value(self):
+        text = "service: http_status:404\n"
+        result = _parse_simple_yaml(text)
+        assert result["service"] == "http_status:404"

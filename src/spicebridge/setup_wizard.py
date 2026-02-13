@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import json
 import os
 import platform
 import re
 import secrets
-import select
 import shutil
 import signal
 import subprocess
@@ -41,6 +41,7 @@ _CLOUDFLARED_CONFIG_FILE = _CLOUDFLARED_CONFIG_DIR / "config.yml"
 
 _HOSTNAME_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$")
 _TUNNEL_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+_TUNNEL_ID_RE = re.compile(r"^[a-f0-9][a-f0-9-]*[a-f0-9]$")
 
 
 def _validate_hostname(hostname: str) -> bool:
@@ -51,6 +52,15 @@ def _validate_hostname(hostname: str) -> bool:
 def _validate_tunnel_name(name: str) -> bool:
     """Return True if tunnel name is safe for CLI use."""
     return bool(name) and _TUNNEL_NAME_RE.match(name) is not None
+
+
+def _validate_tunnel_id(tunnel_id: str) -> bool:
+    """Return True if tunnel_id looks like a valid hex/UUID string."""
+    return (
+        bool(tunnel_id)
+        and len(tunnel_id) <= 64
+        and _TUNNEL_ID_RE.match(tunnel_id) is not None
+    )
 
 
 _BANNER = """\
@@ -176,6 +186,11 @@ def _offer_install_cloudflared(no_install: bool = False) -> bool:
     os_type = _detect_os()
     if os_type not in ("macos", "linux-deb"):
         print(_install_cloudflared_instructions())
+        return False
+
+    if not sys.stdin.isatty():
+        print("Non-interactive mode detected. Skipping automatic install.")
+        print("Install cloudflared manually, then re-run the wizard.")
         return False
 
     if not _prompt_yes_no("cloudflared not found. Attempt automatic install?"):
@@ -304,12 +319,17 @@ def _cloudflared_tunnel_list() -> list[dict]:
 
 def _cloudflared_tunnel_create(name: str) -> str:
     """Create a tunnel and return its UUID."""
-    result = subprocess.run(
-        ["cloudflared", "tunnel", "create", name],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    try:
+        result = subprocess.run(
+            ["cloudflared", "tunnel", "create", name],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"Timed out creating tunnel '{name}'") from e
+    except FileNotFoundError as e:
+        raise RuntimeError("cloudflared not found on PATH") from e
     if result.returncode != 0:
         raise RuntimeError(f"Failed to create tunnel '{name}': {result.stderr.strip()}")
     # Parse UUID from output like "Created tunnel <name> with id <uuid>"
@@ -322,12 +342,15 @@ def _cloudflared_tunnel_create(name: str) -> str:
 
 def _cloudflared_tunnel_delete(name: str) -> bool:
     """Delete a tunnel by name. Returns True on success."""
-    result = subprocess.run(
-        ["cloudflared", "tunnel", "delete", name],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    try:
+        result = subprocess.run(
+            ["cloudflared", "tunnel", "delete", "--force", name],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
     return result.returncode == 0
 
 
@@ -358,16 +381,24 @@ def _generate_config_yml(
     credentials_file: str,
     hostname: str,
     local_port: int,
+    host: str = "127.0.0.1",
 ) -> str:
     """Generate cloudflared config.yml content."""
-    assert _validate_hostname(hostname), f"Invalid hostname: {hostname!r}"
+    if not _validate_hostname(hostname):
+        raise ValueError(f"Invalid hostname: {hostname!r}")
+    if not _validate_tunnel_id(tunnel_id):
+        raise ValueError(f"Invalid tunnel ID: {tunnel_id!r}")
+    creds_path = Path(credentials_file).resolve()
+    config_dir = _CLOUDFLARED_CONFIG_DIR.resolve()
+    if not str(creds_path).startswith(str(config_dir) + os.sep):
+        raise ValueError(f"Credentials file outside config dir: {credentials_file}")
     return (
         f"tunnel: {tunnel_id}\n"
         f"credentials-file: {credentials_file}\n"
         f"\n"
         f"ingress:\n"
         f"  - hostname: {hostname}\n"
-        f"    service: http://127.0.0.1:{local_port}\n"
+        f"    service: http://{host}:{local_port}\n"
         f"  - service: http_status:404\n"
     )
 
@@ -383,15 +414,12 @@ def _write_config_yml(content: str) -> Path:
 
     # Atomic write: write to temp file then rename
     fd, tmp = tempfile.mkstemp(dir=str(_CLOUDFLARED_CONFIG_DIR))
-    closed = False
     try:
-        os.write(fd, content.encode())
-        os.close(fd)
-        closed = True
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.chmod(tmp, 0o600)
         os.replace(tmp, str(config_file))
     except BaseException:
-        if not closed:
-            os.close(fd)
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
@@ -424,7 +452,7 @@ def _detect_existing_config() -> dict | None:
         parsed = _parse_simple_yaml(text)
         if "tunnel" in parsed:
             return parsed
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         pass
     return None
 
@@ -474,11 +502,15 @@ def _start_server(
     )
 
 
-def _wait_for_server(host: str, port: int, timeout: int = 30) -> bool:
+def _wait_for_server(
+    host: str, port: int, timeout: int = 30, server_proc: subprocess.Popen | None = None
+) -> bool:
     """Wait for the server to respond. Returns True if ready."""
     url = f"http://{host}:{port}/mcp"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if server_proc is not None and server_proc.poll() is not None:
+            return False
         try:
             req = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(req, timeout=2):  # noqa: S310
@@ -493,26 +525,34 @@ def _start_tunnel_quick(local_port: int) -> tuple[subprocess.Popen, str]:
     proc = subprocess.Popen(
         ["cloudflared", "tunnel", "--url", f"http://127.0.0.1:{local_port}"],
         stderr=subprocess.PIPE,
-        text=True,
     )
     # Parse the tunnel URL from stderr output.
-    # Uses select() to avoid blocking on partial lines (Unix-only: Linux + macOS).
+    # Uses fcntl + os.read to avoid blocking on partial lines (Unix-only).
+    fd = proc.stderr.fileno()  # type: ignore[union-attr]
+    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
     url = ""
+    buf = b""
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        ready, _, _ = select.select([proc.stderr], [], [], 1.0)  # type: ignore[arg-type]
-        if not ready:
+        try:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+                continue
+            buf += chunk
+        except BlockingIOError:
             if proc.poll() is not None:
                 break
+            time.sleep(0.1)
             continue
-        line = proc.stderr.readline()  # type: ignore[union-attr]
-        if not line:
-            if proc.poll() is not None:
-                break
-            continue
-        if "trycloudflare.com" in line:
-            # Extract URL from the line
-            for word in line.split():
+
+        text = buf.decode("utf-8", errors="replace")
+        if "trycloudflare.com" in text:
+            for word in text.split():
                 if "trycloudflare.com" in word:
                     url = word.strip().rstrip("|")
                     if not url.startswith("http"):
@@ -524,9 +564,11 @@ def _start_tunnel_quick(local_port: int) -> tuple[subprocess.Popen, str]:
     # Drain remaining stderr in background to prevent 64KB pipe buffer deadlock.
     def _drain_stderr() -> None:
         try:
-            while proc.stderr and proc.stderr.readline():  # type: ignore[union-attr]
-                pass
-        except (OSError, ValueError):
+            while True:
+                data = os.read(fd, 4096)
+                if not data:
+                    break
+        except OSError:
             pass
 
     if url:
@@ -545,6 +587,7 @@ def _start_tunnel_named(tunnel_name: str) -> subprocess.Popen:
 
 def _run_processes(server_proc: subprocess.Popen, tunnel_proc: subprocess.Popen) -> int:
     """Block until Ctrl+C, then cleanly shut down both processes."""
+    interrupted = False
 
     def _shutdown(signum, frame):  # noqa: ARG001, ANN001
         raise KeyboardInterrupt
@@ -563,11 +606,14 @@ def _run_processes(server_proc: subprocess.Popen, tunnel_proc: subprocess.Popen)
             time.sleep(1)
     except KeyboardInterrupt:
         print("\nShutting down...")
+        interrupted = True
     finally:
         signal.signal(signal.SIGINT, original_sigint)
         for proc in (tunnel_proc, server_proc):
             _kill_proc(proc)
 
+    if interrupted:
+        return 130
     if (server_proc.returncode or 0) != 0 or (tunnel_proc.returncode or 0) != 0:
         return 1
     return 0
@@ -604,6 +650,10 @@ def _print_connection_info(url: str, is_permanent: bool, api_key: str = "") -> N
     if not is_permanent:
         print("  Note: This URL is temporary and will change on restart.")
         print("  For a permanent URL, run: spicebridge setup-cloud")
+        if api_key:
+            print(
+                "  Warning: This API key is temporary and dies when the wizard stops."
+            )
         print()
     print("  Press Ctrl+C to stop.")
     print()
@@ -622,6 +672,16 @@ def run_wizard(argv: list[str] | None = None) -> int:
     if not (1 <= args.port <= 65535):
         print(f"Error: Port must be between 1 and 65535, got {args.port}.")
         return 1
+
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            f"Warning: --host {args.host} will bind the server"
+            " to a non-loopback address."
+        )
+        print("The Cloudflare tunnel always targets 127.0.0.1.")
+        print("Use --host 127.0.0.1 (default) unless you know what you're doing.")
+        if not _prompt_yes_no("Continue anyway?", default=False):
+            return 1
 
     if args.domain and not _validate_hostname(args.domain):
         print(f"Error: Invalid hostname: {args.domain!r}")
@@ -674,24 +734,31 @@ def _quick_tunnel_flow(args: argparse.Namespace) -> int:
     server_proc = _start_server(
         args.host, args.port, _DEFAULT_TRANSPORT, api_key=api_key
     )
-    print(f"Server starting on {args.host}:{args.port}...")
+    try:
+        print(f"Server starting on {args.host}:{args.port}...")
 
-    if not _wait_for_server(args.host, args.port):
-        print("Error: Server failed to start within 30 seconds.")
+        if not _wait_for_server(args.host, args.port, server_proc=server_proc):
+            print("Error: Server failed to start within 30 seconds.")
+            _kill_proc(server_proc)
+            return 1
+
+        print("Server ready.")
+        tunnel_proc, url = _start_tunnel_quick(args.port)
+        try:
+            if not url:
+                print("Error: Could not obtain quick tunnel URL.")
+                _kill_proc(tunnel_proc)
+                _kill_proc(server_proc)
+                return 1
+
+            _print_connection_info(url, is_permanent=False, api_key=api_key)
+            return _run_processes(server_proc, tunnel_proc)
+        except BaseException:
+            _kill_proc(tunnel_proc)
+            raise
+    except BaseException:
         _kill_proc(server_proc)
-        return 1
-
-    print("Server ready.")
-    tunnel_proc, url = _start_tunnel_quick(args.port)
-
-    if not url:
-        print("Error: Could not obtain quick tunnel URL.")
-        _kill_proc(tunnel_proc)
-        _kill_proc(server_proc)
-        return 1
-
-    _print_connection_info(url, is_permanent=False, api_key=api_key)
-    return _run_processes(server_proc, tunnel_proc)
+        raise
 
 
 def _named_tunnel_flow(args: argparse.Namespace) -> int:
@@ -709,14 +776,14 @@ def _named_tunnel_flow(args: argparse.Namespace) -> int:
         print("Running: cloudflared tunnel login")
         result = subprocess.run(
             ["cloudflared", "tunnel", "login"],
-            timeout=120,
+            timeout=600,
         )
         if result.returncode != 0:
             print("Login failed.")
             return 1
 
     # List existing tunnels
-    tunnels = _cloudflared_tunnel_list()
+    tunnels = [t for t in _cloudflared_tunnel_list() if t.get("name")]
     tunnel_name = args.tunnel_name
 
     if tunnels:
@@ -753,10 +820,11 @@ def _named_tunnel_flow(args: argparse.Namespace) -> int:
             if not _cloudflared_tunnel_delete(del_name):
                 print(f"Error: Failed to delete tunnel '{del_name}'.")
                 return 1
-            tunnel_id = _create_new_tunnel(args, tunnel_name)
+            tunnel_id = _create_new_tunnel(args, del_name)
             if not tunnel_id:
                 print("Error: Failed to create new tunnel.")
                 return 1
+            tunnel_name = del_name
         else:
             tunnel_name = _prompt_string("Tunnel name", default=tunnel_name)
             while not _validate_tunnel_name(tunnel_name):
@@ -791,8 +859,14 @@ def _named_tunnel_flow(args: argparse.Namespace) -> int:
             )
 
     # Generate config if we have enough info
+    if not hostname:
+        print("No hostname provided. Skipping config generation and DNS routing.")
+        print(
+            "You'll need to configure the tunnel manually via the Cloudflare dashboard."
+        )
+
     if hostname:
-        tunnels = _cloudflared_tunnel_list()
+        tunnels = [t for t in _cloudflared_tunnel_list() if t.get("name")]
         tunnel_id = ""
         for t in tunnels:
             if t.get("name") == tunnel_name:
@@ -801,19 +875,20 @@ def _named_tunnel_flow(args: argparse.Namespace) -> int:
 
         if tunnel_id:
             creds_file = str(_CLOUDFLARED_CONFIG_DIR / f"{tunnel_id}.json")
-            config = _generate_config_yml(tunnel_id, creds_file, hostname, args.port)
+            config = _generate_config_yml(
+                tunnel_id, creds_file, hostname, args.port, host=args.host
+            )
 
-            if _CLOUDFLARED_CONFIG_FILE.exists():
-                if not _prompt_yes_no("Overwrite existing config.yml?"):
-                    print("Keeping existing config.")
-                else:
-                    _write_config_yml(config)
-            else:
+            write_config = True
+            if _CLOUDFLARED_CONFIG_FILE.exists() and not _prompt_yes_no(
+                "Overwrite existing config.yml?"
+            ):
+                print("Keeping existing config.")
+                write_config = False
+            if write_config:
                 _write_config_yml(config)
-
-            # Route DNS
-            print(f"\nRouting DNS: {hostname} -> tunnel {tunnel_name}")
-            _cloudflared_tunnel_route_dns(tunnel_name, hostname)
+                print(f"\nRouting DNS: {hostname} -> tunnel {tunnel_name}")
+                _cloudflared_tunnel_route_dns(tunnel_name, hostname)
 
     return _start_named_tunnel(args, tunnel_name)
 
@@ -823,6 +898,8 @@ def _create_new_tunnel(args: argparse.Namespace, tunnel_name: str) -> str:  # no
     print(f"\nCreating tunnel '{tunnel_name}'...")
     try:
         tunnel_id = _cloudflared_tunnel_create(tunnel_name)
+        if not _validate_tunnel_id(tunnel_id):
+            print(f"Warning: Unexpected tunnel ID format: {tunnel_id!r}")
         print(f"Tunnel created: {tunnel_id}")
         return tunnel_id
     except RuntimeError as e:
@@ -839,21 +916,32 @@ def _start_named_tunnel(args: argparse.Namespace, tunnel_name: str) -> int:
     server_proc = _start_server(
         args.host, args.port, _DEFAULT_TRANSPORT, api_key=api_key
     )
-    print(f"\nServer starting on {args.host}:{args.port}...")
+    try:
+        print(f"\nServer starting on {args.host}:{args.port}...")
 
-    if not _wait_for_server(args.host, args.port):
-        print("Error: Server failed to start within 30 seconds.")
+        if not _wait_for_server(args.host, args.port, server_proc=server_proc):
+            print("Error: Server failed to start within 30 seconds.")
+            _kill_proc(server_proc)
+            return 1
+
+        print("Server ready.")
+        print(f"Starting named tunnel '{tunnel_name}'...")
+        tunnel_proc = _start_tunnel_named(tunnel_name)
+        try:
+            time.sleep(3)
+
+            hostname = args.domain
+            url = (
+                f"https://{hostname}"
+                if hostname
+                else "(check Cloudflare dashboard for URL)"
+            )
+
+            _print_connection_info(url, is_permanent=True, api_key=api_key)
+            return _run_processes(server_proc, tunnel_proc)
+        except BaseException:
+            _kill_proc(tunnel_proc)
+            raise
+    except BaseException:
         _kill_proc(server_proc)
-        return 1
-
-    print("Server ready.")
-    print(f"Starting named tunnel '{tunnel_name}'...")
-    tunnel_proc = _start_tunnel_named(tunnel_name)
-
-    time.sleep(3)
-
-    hostname = args.domain
-    url = f"https://{hostname}" if hostname else "(check Cloudflare dashboard for URL)"
-
-    _print_connection_info(url, is_permanent=True, api_key=api_key)
-    return _run_processes(server_proc, tunnel_proc)
+        raise
