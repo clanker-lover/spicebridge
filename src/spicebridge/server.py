@@ -11,7 +11,7 @@ import shutil
 import time
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ImageContent, TextContent
+from mcp.types import ImageContent, TextContent, ToolAnnotations
 from starlette.responses import Response
 
 from spicebridge.circuit_manager import CircuitManager
@@ -161,7 +161,15 @@ async def serve_schematic(request):
     return Response(content=png_bytes, status_code=200, media_type="image/png")
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Create Circuit",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+)
 def create_circuit(netlist: str, models: list[str] | None = None) -> dict:
     """Store a SPICE netlist and return a circuit ID for subsequent analyses."""
     if len(netlist) > _MAX_NETLIST_SIZE:
@@ -206,7 +214,15 @@ def create_circuit(netlist: str, models: list[str] | None = None) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Run AC Analysis",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def run_ac_analysis(
     circuit_id: str,
     start_freq: float = 1.0,
@@ -254,7 +270,15 @@ def run_ac_analysis(
         return safe_error_response(e, logger, "run_ac_analysis")
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Run Transient Analysis",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def run_transient(
     circuit_id: str,
     stop_time: float,
@@ -307,7 +331,15 @@ def run_transient(
         return safe_error_response(e, logger, "run_transient")
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Run DC Operating Point",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def run_dc_op(circuit_id: str) -> dict:
     """Run DC operating point analysis on a stored circuit."""
     try:
@@ -348,7 +380,15 @@ def _summarize_results(data: object) -> object:
     return data
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Results",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def get_results(circuit_id: str, summary: bool = True) -> dict:
     """Return the last simulation results for a circuit."""
     try:
@@ -366,7 +406,15 @@ def get_results(circuit_id: str, summary: bool = True) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Delete Circuit",
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def delete_circuit(circuit_id: str) -> dict:
     """Delete a stored circuit and clean up its output directory."""
     try:
@@ -377,7 +425,15 @@ def delete_circuit(circuit_id: str) -> dict:
     return {"status": "ok"}
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Draw Schematic",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
     """Generate a schematic diagram from a stored circuit's netlist.
 
@@ -434,7 +490,15 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
         return _error_content(safe_error_response(e, logger, "draw_schematic"))
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Export KiCad Schematic",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def export_kicad(circuit_id: str, filename: str | None = None) -> dict:
     """Export circuit as KiCad 8 schematic (.kicad_sch) file."""
     try:
@@ -462,7 +526,15 @@ def export_kicad(circuit_id: str, filename: str | None = None) -> dict:
         return safe_error_response(e, logger, "export_kicad")
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Open Schematic Viewer",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def open_viewer(circuit_id: str | None = None, port: int = 8080) -> dict:
     """Start the interactive web schematic viewer and return its URL."""
     if not (1024 <= port <= 65535):
@@ -483,7 +555,15 @@ def open_viewer(circuit_id: str | None = None, port: int = 8080) -> dict:
     return result
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Set Ports",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def set_ports(circuit_id: str, ports: dict) -> dict:
     """Store port definitions for a circuit.
 
@@ -507,7 +587,15 @@ def set_ports(circuit_id: str, ports: dict) -> dict:
     return {"status": "ok", "circuit_id": circuit_id, "ports": ports}
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Get Ports",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def get_ports(circuit_id: str) -> dict:
     """Return port definitions for a circuit, auto-detecting if none are set."""
     try:
@@ -524,7 +612,15 @@ def get_ports(circuit_id: str) -> dict:
     return {"status": "ok", "circuit_id": circuit_id, "ports": ports}
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Connect Stages",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+)
 def connect_stages(
     stages: list[dict],
     connections: list[dict] | None = None,
@@ -606,14 +702,30 @@ def connect_stages(
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Templates",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def list_templates(category: str | None = None) -> dict:
     """List available circuit templates, optionally filtered by category."""
     templates = _templates.list_templates(category=category)
     return {"status": "ok", "templates": templates, "count": len(templates)}
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Load Template",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+)
 def load_template(
     template_id: str,
     params: dict | None = None,
@@ -696,7 +808,15 @@ def load_template(
     return result
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Modify Component",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def modify_component(circuit_id: str, component: str, value: str) -> dict:
     """Modify a component value in a stored circuit's netlist."""
     try:
@@ -726,7 +846,15 @@ def modify_component(circuit_id: str, component: str, value: str) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Validate Netlist",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def validate_netlist(circuit_id: str) -> dict:
     """Validate the netlist syntax of a stored circuit using ngspice."""
     try:
@@ -867,7 +995,15 @@ def _check_spec(actual: float | None, spec_def: dict) -> tuple[bool, dict]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Measure Bandwidth",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def measure_bandwidth(circuit_id: str, threshold_db: float = -3.0) -> dict:
     """Measure the bandwidth (cutoff frequency) of an AC analysis result.
 
@@ -903,7 +1039,15 @@ def measure_bandwidth(circuit_id: str, threshold_db: float = -3.0) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Measure Gain",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def measure_gain(circuit_id: str, frequency_hz: float) -> dict:
     """Measure gain and phase at a specific frequency from AC analysis results."""
     if frequency_hz <= 0:
@@ -928,7 +1072,15 @@ def measure_gain(circuit_id: str, frequency_hz: float) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Measure DC Voltage",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def measure_dc(circuit_id: str, node_name: str) -> dict:
     """Measure the DC voltage at a specific node from operating point results."""
     check = _require_results(circuit_id, "Operating Point")
@@ -953,7 +1105,15 @@ def measure_dc(circuit_id: str, node_name: str) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Measure Transient Response",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def measure_transient(circuit_id: str) -> dict:
     """Extract key transient response metrics (rise time, settling time, overshoot)."""
     check = _require_results(circuit_id, "Transient Analysis")
@@ -973,7 +1133,15 @@ def measure_transient(circuit_id: str) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Measure Power",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def measure_power(circuit_id: str) -> dict:
     """Measure power consumption from DC operating point results."""
     check = _require_results(circuit_id, "Operating Point")
@@ -1016,7 +1184,15 @@ def measure_power(circuit_id: str) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Compare Specs",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def compare_specs(circuit_id: str, specs: dict) -> dict:
     """Compare simulation results against design specifications.
 
@@ -1053,7 +1229,15 @@ def compare_specs(circuit_id: str, specs: dict) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Calculate Components",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def calculate_components(topology_id: str, specs: dict) -> dict:
     """Calculate component values for a circuit topology from target specs."""
     try:
@@ -1136,7 +1320,15 @@ def _collect_measurements(circuit_id: str, sim_type: str, specs: dict) -> dict:
     return measurements
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Auto Design",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+)
 def auto_design(
     template_id: str,
     specs: dict,
@@ -1247,7 +1439,15 @@ def auto_design(
     return blocks
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Create Model",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+)
 def create_model(
     component_type: str,
     name: str,
@@ -1276,7 +1476,15 @@ def create_model(
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Models",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def list_models() -> dict:
     """Return all saved SPICE models from the model library."""
     return {
@@ -1434,7 +1642,15 @@ def _solve_and_snap(
     return netlist, calculated_values, solver_notes, None
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Run Monte Carlo Analysis",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    )
+)
 def run_monte_carlo(
     circuit_id: str,
     analysis_type: str,
@@ -1540,7 +1756,15 @@ def run_monte_carlo(
     return response
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Run Worst-Case Analysis",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
 def run_worst_case(
     circuit_id: str,
     analysis_type: str,
