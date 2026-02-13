@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import time
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent, ToolAnnotations
@@ -145,6 +146,34 @@ def _svg_to_image_content(
 def _error_content(error_dict: dict) -> list[TextContent]:
     """Wrap an error dict as a list containing a single TextContent block."""
     return [TextContent(type="text", text=json.dumps(error_dict))]
+
+
+_favicon_png: bytes | None = None
+
+
+def _load_favicon() -> bytes | None:
+    """Load assets/logo.svg and convert to PNG for favicon use."""
+    global _favicon_png
+    if _favicon_png is not None:
+        return _favicon_png
+    svg_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo.svg"
+    if not svg_path.is_file():
+        return None
+    import cairosvg
+
+    _favicon_png = cairosvg.svg2png(
+        url=str(svg_path), output_width=64, output_height=64
+    )
+    return _favicon_png
+
+
+@mcp.custom_route("/favicon.ico", methods=["GET"])
+async def serve_favicon(request):
+    """Serve the SPICEBridge logo as a favicon."""
+    png = _load_favicon()
+    if png is None:
+        return Response(content=b"", status_code=404)
+    return Response(content=png, status_code=200, media_type="image/png")
 
 
 @mcp.custom_route("/schematics/{circuit_id}.png", methods=["GET"])
