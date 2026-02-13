@@ -502,6 +502,13 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
             metadata["_assistant_hint"] = (
                 f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link. This is a PUBLIC URL accessible from any browser, not a sandbox or internal URL: {url}"
             )
+            # Always cache PNG so the /schematics/ HTTP route can serve it
+            import cairosvg as _cairosvg
+
+            _schematic_cache.put(
+                circuit_id,
+                _cairosvg.svg2png(bytestring=svg_content.encode("utf-8")),
+            )
         if _http_transport:
             metadata.pop("svg_content", None)
             metadata.pop("filepath", None)
@@ -1451,6 +1458,15 @@ def auto_design(
         result["_assistant_hint"] = (
             f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link. This is a PUBLIC URL accessible from any browser, not a sandbox or internal URL: {url}"
         )
+        # Always cache PNG so the /schematics/ HTTP route can serve it
+        svg_for_cache = result.get("svg_content")
+        if svg_for_cache:
+            import cairosvg as _cairosvg
+
+            _schematic_cache.put(
+                circuit_id,
+                _cairosvg.svg2png(bytestring=svg_for_cache.encode("utf-8")),
+            )
 
     if _http_transport:
         svg_for_image = result.pop("svg_content", None)
