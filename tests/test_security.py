@@ -281,7 +281,8 @@ class TestPathTraversal:
         ids=["traversal", "disallowed-ext"],
     )
     def test_draw_schematic_rejects_invalid_format(self, fmt):
-        result = draw_schematic("any_id", fmt=fmt)
+        result_blocks = draw_schematic("any_id", fmt=fmt)
+        result = json.loads(result_blocks[0].text)
         assert result["status"] == "error"
         assert "Invalid format" in result["error"]
 
@@ -709,7 +710,8 @@ class TestErrorSanitization:
         setup = create_circuit(_CLEAN_NETLIST)
         cid = setup["circuit_id"]
         with patch("spicebridge.server._draw_schematic"):
-            result = draw_schematic(cid, fmt="png")
+            result_blocks = draw_schematic(cid, fmt="png")
+        result = json.loads(result_blocks[0].text)
         if result["status"] == "ok":
             assert "/home/" not in result["filepath"]
             assert "/tmp/" not in result["filepath"]

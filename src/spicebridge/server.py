@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import re
 import shutil
 import time
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ImageContent, TextContent
 
 from spicebridge.circuit_manager import CircuitManager
 from spicebridge.composer import auto_detect_ports, compose_stages
@@ -95,6 +98,17 @@ def _resolve_model_includes(model_names: list[str]) -> str:
                 f"Model '{name}' not found. Use list_models() to see available models."
             ) from None
     return "\n".join(lines)
+
+
+def _svg_to_image_content(svg_content: str) -> ImageContent:
+    """Base64-encode an SVG string and return an MCP ImageContent block."""
+    b64 = base64.b64encode(svg_content.encode("utf-8")).decode("ascii")
+    return ImageContent(type="image", data=b64, mimeType="image/svg+xml")
+
+
+def _error_content(error_dict: dict) -> list[TextContent]:
+    """Wrap an error dict as a list containing a single TextContent block."""
+    return [TextContent(type="text", text=json.dumps(error_dict))]
 
 
 @mcp.tool()
@@ -313,16 +327,16 @@ def delete_circuit(circuit_id: str) -> dict:
 
 
 @mcp.tool()
-def draw_schematic(circuit_id: str, fmt: str = "png") -> dict:
+def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
     """Generate a schematic diagram from a stored circuit's netlist."""
     try:
         validate_format(fmt)
     except ValueError as e:
-        return {"status": "error", "error": str(e)}
+        return _error_content({"status": "error", "error": str(e)})
     try:
         circuit = _manager.get(circuit_id)
     except KeyError as e:
-        return {"status": "error", "error": str(e)}
+        return _error_content({"status": "error", "error": str(e)})
 
     try:
         output_file = safe_path(circuit.output_dir, f"schematic.{fmt}")
@@ -334,9 +348,10 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> dict:
             svg_file = safe_path(circuit.output_dir, "schematic.svg")
             _draw_schematic(circuit.netlist, svg_file, fmt="svg")
             svg_content = svg_file.read_text(encoding="utf-8")
-        return {"status": "ok", "filepath": output_file.name, "format": fmt, "svg_content": svg_content}
+        metadata = {"status": "ok", "filepath": output_file.name, "format": fmt, "svg_content": svg_content}
+        return [TextContent(type="text", text=json.dumps(metadata)), _svg_to_image_content(svg_content)]
     except Exception as e:
-        return safe_error_response(e, logger, "draw_schematic")
+        return _error_content(safe_error_response(e, logger, "draw_schematic"))
 
 
 @mcp.tool()
@@ -1047,7 +1062,7 @@ def auto_design(
     specs: dict,
     sim_type: str = "ac",
     sim_params: dict | None = None,
-) -> dict:
+) -> list:
     """Run the full design loop in one call: load template, simulate, and verify.
 
     *specs* uses compare_specs format:
@@ -1071,7 +1086,7 @@ def auto_design(
         load_args["specs"] = solver_specs
     loaded = load_template(**load_args)
     if loaded.get("status") != "ok":
-        return {**result, **loaded, "failed_step": "load_template"}
+        return _error_content({**result, **loaded, "failed_step": "load_template"})
     result["circuit_id"] = loaded["circuit_id"]
     result["netlist_preview"] = loaded.get("preview", [])
     result["calculated_values"] = loaded.get("calculated_values")
@@ -1082,24 +1097,24 @@ def auto_design(
     # 3. Validate netlist
     validation = validate_netlist(circuit_id)
     if validation.get("status") != "ok" or not validation.get("valid", False):
-        return {
+        return _error_content({
             **result,
             "validation": validation,
             "failed_step": "validate_netlist",
             "status": "error",
             "error": "Netlist validation failed",
-        }
+        })
 
     # 4. Simulate
     sim_result = _run_sim(circuit_id, sim_type, sim_params)
     result["simulation"] = sim_result
     if sim_result.get("status") != "ok":
-        return {
+        return _error_content({
             **result,
             "failed_step": "simulation",
             "status": "error",
             "error": sim_result.get("error", "Simulation failed"),
-        }
+        })
 
     # 5. Collect measurements
     result["measurements"] = _collect_measurements(circuit_id, sim_type, specs)
@@ -1120,7 +1135,10 @@ def auto_design(
 
     result["status"] = "ok"
 
-    return result
+    blocks: list = [TextContent(type="text", text=json.dumps(result, default=str))]
+    if "svg_content" in result:
+        blocks.append(_svg_to_image_content(result["svg_content"]))
+    return blocks
 
 
 @mcp.tool()

@@ -1,14 +1,24 @@
 """Tests for spicebridge.schematic — parser and renderer."""
 
+import base64
+import json
 import os
 import tempfile
 from pathlib import Path
 
 import pytest
 
+from mcp.types import ImageContent, TextContent
 from spicebridge.schematic import ParsedComponent, draw_schematic, parse_netlist
 from spicebridge.server import create_circuit
 from spicebridge.server import draw_schematic as server_draw_schematic
+
+
+def _extract_metadata(result):
+    """Extract JSON metadata dict from content block list."""
+    assert isinstance(result, list)
+    assert isinstance(result[0], TextContent)
+    return json.loads(result[0].text)
 
 # --- Test netlists ---
 
@@ -168,7 +178,8 @@ class TestSchematicIntegration:
         assert result["status"] == "ok"
         cid = result["circuit_id"]
 
-        schem = server_draw_schematic(cid, fmt="png")
+        result_blocks = server_draw_schematic(cid, fmt="png")
+        schem = _extract_metadata(result_blocks)
         assert schem["status"] == "ok"
         assert schem["format"] == "png"
         # filepath is now a bare filename (no absolute path leak)
@@ -179,7 +190,8 @@ class TestSchematicIntegration:
         result = create_circuit(RC_LOWPASS)
         cid = result["circuit_id"]
 
-        schem = server_draw_schematic(cid, fmt="svg")
+        result_blocks = server_draw_schematic(cid, fmt="svg")
+        schem = _extract_metadata(result_blocks)
         assert schem["status"] == "ok"
         assert "svg_content" in schem
         assert schem["svg_content"].lstrip().startswith(("<?xml", "<svg"))
@@ -188,15 +200,28 @@ class TestSchematicIntegration:
         result = create_circuit(RC_LOWPASS)
         cid = result["circuit_id"]
 
-        schem = server_draw_schematic(cid, fmt="png")
+        result_blocks = server_draw_schematic(cid, fmt="png")
+        schem = _extract_metadata(result_blocks)
         assert schem["status"] == "ok"
         assert "svg_content" in schem
         assert schem["svg_content"].lstrip().startswith(("<?xml", "<svg"))
 
     def test_server_draw_schematic_invalid_id(self):
-        result = server_draw_schematic("nonexistent", fmt="png")
+        result_blocks = server_draw_schematic("nonexistent", fmt="png")
+        result = _extract_metadata(result_blocks)
         assert result["status"] == "error"
         assert "not found" in result["error"]
+
+    def test_server_draw_schematic_returns_image_content(self):
+        result = create_circuit(RC_LOWPASS)
+        cid = result["circuit_id"]
+
+        result_blocks = server_draw_schematic(cid, fmt="svg")
+        assert len(result_blocks) == 2
+        assert isinstance(result_blocks[1], ImageContent)
+        assert result_blocks[1].mimeType == "image/svg+xml"
+        decoded = base64.b64decode(result_blocks[1].data).decode("utf-8")
+        assert decoded.lstrip().startswith(("<?xml", "<svg"))
 
 
 def test_no_matplotlib_in_source():
