@@ -327,7 +327,14 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> dict:
     try:
         output_file = safe_path(circuit.output_dir, f"schematic.{fmt}")
         _draw_schematic(circuit.netlist, output_file, fmt=fmt)
-        return {"status": "ok", "filepath": output_file.name, "format": fmt}
+        # Always provide SVG content for cloud mode (MCP over streamable-http)
+        if fmt == "svg":
+            svg_content = output_file.read_text(encoding="utf-8")
+        else:
+            svg_file = safe_path(circuit.output_dir, "schematic.svg")
+            _draw_schematic(circuit.netlist, svg_file, fmt="svg")
+            svg_content = svg_file.read_text(encoding="utf-8")
+        return {"status": "ok", "filepath": output_file.name, "format": fmt, "svg_content": svg_content}
     except Exception as e:
         return safe_error_response(e, logger, "draw_schematic")
 
@@ -347,12 +354,14 @@ def export_kicad(circuit_id: str, filename: str | None = None) -> dict:
             output_dir=circuit.output_dir,
             filename=fname,
         )
+        kicad_content = output_path.read_text(encoding="utf-8")
         comps = parse_netlist(circuit.netlist)
         return {
             "status": "ok",
             "file_path": output_path.name,
             "num_components": len(comps),
             "warnings": warnings,
+            "kicad_content": kicad_content,
         }
     except Exception as e:
         return safe_error_response(e, logger, "export_kicad")
@@ -1099,6 +1108,16 @@ def auto_design(
     comparison = compare_specs(circuit_id, specs)
     result["comparison"] = comparison
     result["all_specs_passed"] = comparison.get("all_passed", False)
+
+    # 7. Generate SVG schematic for cloud mode
+    try:
+        circuit = _manager.get(circuit_id)
+        svg_file = safe_path(circuit.output_dir, "schematic.svg")
+        _draw_schematic(circuit.netlist, svg_file, fmt="svg")
+        result["svg_content"] = svg_file.read_text(encoding="utf-8")
+    except Exception:
+        pass  # schematic is best-effort; don't fail the design loop
+
     result["status"] = "ok"
 
     return result

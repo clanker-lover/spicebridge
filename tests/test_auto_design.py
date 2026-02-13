@@ -101,3 +101,15 @@ def test_auto_design_returns_netlist_preview():
     assert result["status"] == "ok"
     assert "netlist_preview" in result
     assert len(result["netlist_preview"]) > 0
+
+
+def test_auto_design_returns_svg_content():
+    """Result includes svg_content with valid SVG markup."""
+    result = auto_design(
+        template_id="rc_lowpass_1st",
+        specs={"f_3dB_hz": {"target": 1000, "tolerance_pct": 10}},
+        sim_type="ac",
+    )
+    assert result["status"] == "ok"
+    assert "svg_content" in result
+    assert result["svg_content"].lstrip().startswith(("<?xml", "<svg"))

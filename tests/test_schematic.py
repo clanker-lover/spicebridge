@@ -175,6 +175,24 @@ class TestSchematicIntegration:
         assert "/" not in schem["filepath"]
         assert schem["filepath"] == "schematic.png"
 
+    def test_server_draw_schematic_returns_svg_content(self):
+        result = create_circuit(RC_LOWPASS)
+        cid = result["circuit_id"]
+
+        schem = server_draw_schematic(cid, fmt="svg")
+        assert schem["status"] == "ok"
+        assert "svg_content" in schem
+        assert schem["svg_content"].lstrip().startswith(("<?xml", "<svg"))
+
+    def test_server_draw_schematic_png_still_returns_svg_content(self):
+        result = create_circuit(RC_LOWPASS)
+        cid = result["circuit_id"]
+
+        schem = server_draw_schematic(cid, fmt="png")
+        assert schem["status"] == "ok"
+        assert "svg_content" in schem
+        assert schem["svg_content"].lstrip().startswith(("<?xml", "<svg"))
+
     def test_server_draw_schematic_invalid_id(self):
         result = server_draw_schematic("nonexistent", fmt="png")
         assert result["status"] == "error"

@@ -76,7 +76,7 @@ Handles server startup, tunnel configuration, API key generation, and displays c
    -> PASS
 
 5. draw_schematic(circuit_id)
-   -> schematic PNG
+   -> schematic SVG
 ```
 
 ## Tools
