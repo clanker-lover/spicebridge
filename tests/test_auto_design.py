@@ -4,6 +4,7 @@ import base64
 import json
 
 from mcp.types import ImageContent, TextContent
+
 from spicebridge.server import auto_design
 
 
@@ -138,4 +139,4 @@ def test_auto_design_returns_svg_content():
     assert isinstance(result_blocks[1], ImageContent)
     assert result_blocks[1].mimeType == "image/png"
     decoded = base64.b64decode(result_blocks[1].data)
-    assert decoded[:4] == b'\x89PNG'
+    assert decoded[:4] == b"\x89PNG"

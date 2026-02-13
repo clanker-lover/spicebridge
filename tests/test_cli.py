@@ -38,6 +38,7 @@ def test_host_port_reach_mcp_settings():
 
     # Restore flag set by configure_for_remote() to avoid polluting other tests
     import spicebridge.server as _srv
+
     _srv._http_transport = False
 
     assert captured["host"] == "0.0.0.0"
@@ -75,6 +76,7 @@ def test_host_port_reach_uvicorn_with_auth():
 
     # Restore flag set by configure_for_remote() to avoid polluting other tests
     import spicebridge.server as _srv
+
     _srv._http_transport = False
 
     assert captured["host"] == "0.0.0.0"

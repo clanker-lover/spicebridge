@@ -21,11 +21,13 @@ def _schematic_handler(request):
 
 def _make_app(api_key: str = API_KEY) -> ApiKeyMiddleware:
     """Create a simple Starlette app wrapped with ApiKeyMiddleware."""
-    inner = Starlette(routes=[
-        Route("/", _homepage),
-        Route("/mcp", _homepage),
-        Route("/schematics/{circuit_id}.png", _schematic_handler),
-    ])
+    inner = Starlette(
+        routes=[
+            Route("/", _homepage),
+            Route("/mcp", _homepage),
+            Route("/schematics/{circuit_id}.png", _schematic_handler),
+        ]
+    )
     return ApiKeyMiddleware(inner, api_key)
 
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spicebridge"
-version = "1.1.12"
+version = "1.1.13"
 description = "AI-powered circuit design bridge connecting language models to ngspice simulation via MCP"
 license = {text = "GPL-3.0-or-later"}
 authors = [{name = "Brandon"}]
@@ -60,5 +60,6 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/spicebridge/kicad_export.py" = ["E501"]
+"src/spicebridge/server.py" = ["E501"]
 "src/spicebridge/svg_renderer.py" = ["E501"]
 "src/spicebridge/web_viewer.py" = ["E501"]

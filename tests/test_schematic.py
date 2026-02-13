@@ -7,9 +7,9 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from mcp.types import ImageContent, TextContent
 from starlette.testclient import TestClient
 
-from mcp.types import ImageContent, TextContent
 from spicebridge.schematic import ParsedComponent, draw_schematic, parse_netlist
 from spicebridge.server import _schematic_cache, create_circuit, mcp
 from spicebridge.server import draw_schematic as server_draw_schematic
@@ -20,6 +20,7 @@ def _extract_metadata(result):
     assert isinstance(result, list)
     assert isinstance(result[0], TextContent)
     return json.loads(result[0].text)
+
 
 # --- Test netlists ---
 
@@ -222,8 +223,7 @@ class TestSchematicIntegration:
         assert isinstance(result_blocks[1], ImageContent)
         assert result_blocks[1].mimeType == "image/png"
         decoded = base64.b64decode(result_blocks[1].data)
-        assert decoded[:4] == b'\x89PNG'
-
+        assert decoded[:4] == b"\x89PNG"
 
     def test_schematic_url_present_when_env_set(self, monkeypatch):
         monkeypatch.setenv("SPICEBRIDGE_BASE_URL", "https://mcp.example.com")

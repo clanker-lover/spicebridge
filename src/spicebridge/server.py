@@ -12,7 +12,6 @@ import time
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
-
 from starlette.responses import Response
 
 from spicebridge.circuit_manager import CircuitManager
@@ -49,6 +48,7 @@ from spicebridge.sanitize import (
 )
 from spicebridge.schematic import draw_schematic as _draw_schematic
 from spicebridge.schematic import parse_netlist
+from spicebridge.schematic_cache import SchematicCache
 from spicebridge.simulator import run_simulation, validate_netlist_syntax
 from spicebridge.solver import solve as _solve_components
 from spicebridge.standard_values import (
@@ -61,7 +61,6 @@ from spicebridge.template_manager import (
     modify_component_in_netlist,
     substitute_params,
 )
-from spicebridge.schematic_cache import SchematicCache
 from spicebridge.web_viewer import get_viewer_server, start_viewer
 
 logger = logging.getLogger(__name__)
@@ -120,9 +119,12 @@ def _schematic_url(circuit_id: str) -> str | None:
     return f"{base}/schematics/{circuit_id}.png" if base else None
 
 
-def _svg_to_image_content(svg_content: str, circuit_id: str | None = None) -> ImageContent:
+def _svg_to_image_content(
+    svg_content: str, circuit_id: str | None = None
+) -> ImageContent:
     """Convert SVG to PNG and return an MCP ImageContent block."""
     import cairosvg
+
     png_bytes = cairosvg.svg2png(bytestring=svg_content.encode("utf-8"))
     if circuit_id is not None:
         _schematic_cache.put(circuit_id, png_bytes)
@@ -370,7 +372,9 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
     """Generate a schematic diagram from a stored circuit's netlist.
 
     When a schematic_url is present in the response, ALWAYS include it as a
-    clickable link in your message to the user. Users cannot see inline images."""
+    clickable link in your message to the user. Users cannot see inline images.
+    The schematic_url in the response is a public internet-accessible URL, not a
+    sandbox or localhost URL. Always share it directly with the user."""
     try:
         validate_format(fmt)
     except ValueError as e:
@@ -390,17 +394,29 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
             svg_file = safe_path(circuit.output_dir, "schematic.svg")
             _draw_schematic(circuit.netlist, svg_file, fmt="svg")
             svg_content = svg_file.read_text(encoding="utf-8")
-        metadata = {"status": "ok", "filepath": output_file.name, "format": fmt, "svg_content": svg_content}
+        metadata = {
+            "status": "ok",
+            "filepath": output_file.name,
+            "format": fmt,
+            "svg_content": svg_content,
+        }
         url = _schematic_url(circuit_id)
         if url:
             metadata["schematic_url"] = url
-            metadata["_assistant_hint"] = f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link: {url}"
+            metadata["_assistant_hint"] = (
+                f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link. This is a PUBLIC URL accessible from any browser, not a sandbox or internal URL: {url}"
+            )
         if _http_transport:
             metadata.pop("svg_content", None)
             metadata.pop("filepath", None)
         blocks = [TextContent(type="text", text=json.dumps(metadata))]
         if _http_transport and url:
-            blocks.append(TextContent(type="text", text=f"INSTRUCTION: The user cannot see inline images. You MUST include this schematic link in your response: {url}"))
+            blocks.append(
+                TextContent(
+                    type="text",
+                    text=f"INSTRUCTION: The user cannot see inline images. You MUST include this schematic link in your response. This is a PUBLIC URL accessible from any browser, not a sandbox or internal URL: {url}",
+                )
+            )
         if not _http_transport:
             blocks.append(_svg_to_image_content(svg_content, circuit_id=circuit_id))
         return blocks
@@ -1131,6 +1147,8 @@ def auto_design(
 
     When a schematic_url is present in the response, ALWAYS include it as a
     clickable link in your message to the user. Users cannot see inline images.
+    The schematic_url in the response is a public internet-accessible URL, not a
+    sandbox or localhost URL. Always share it directly with the user.
     """
     result: dict = {}
 
@@ -1154,24 +1172,28 @@ def auto_design(
     # 3. Validate netlist
     validation = validate_netlist(circuit_id)
     if validation.get("status") != "ok" or not validation.get("valid", False):
-        return _error_content({
-            **result,
-            "validation": validation,
-            "failed_step": "validate_netlist",
-            "status": "error",
-            "error": "Netlist validation failed",
-        })
+        return _error_content(
+            {
+                **result,
+                "validation": validation,
+                "failed_step": "validate_netlist",
+                "status": "error",
+                "error": "Netlist validation failed",
+            }
+        )
 
     # 4. Simulate
     sim_result = _run_sim(circuit_id, sim_type, sim_params)
     result["simulation"] = sim_result
     if sim_result.get("status") != "ok":
-        return _error_content({
-            **result,
-            "failed_step": "simulation",
-            "status": "error",
-            "error": sim_result.get("error", "Simulation failed"),
-        })
+        return _error_content(
+            {
+                **result,
+                "failed_step": "simulation",
+                "status": "error",
+                "error": sim_result.get("error", "Simulation failed"),
+            }
+        )
 
     # 5. Collect measurements
     result["measurements"] = _collect_measurements(circuit_id, sim_type, specs)
@@ -1194,7 +1216,9 @@ def auto_design(
     url = _schematic_url(circuit_id)
     if url:
         result["schematic_url"] = url
-        result["_assistant_hint"] = f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link: {url}"
+        result["_assistant_hint"] = (
+            f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link. This is a PUBLIC URL accessible from any browser, not a sandbox or internal URL: {url}"
+        )
 
     if _http_transport:
         svg_for_image = result.pop("svg_content", None)
@@ -1202,7 +1226,12 @@ def auto_design(
         svg_for_image = result.get("svg_content")
     blocks: list = [TextContent(type="text", text=json.dumps(result, default=str))]
     if _http_transport and url:
-        blocks.append(TextContent(type="text", text=f"INSTRUCTION: The user cannot see inline images. You MUST include this schematic link in your response: {url}"))
+        blocks.append(
+            TextContent(
+                type="text",
+                text=f"INSTRUCTION: The user cannot see inline images. You MUST include this schematic link in your response. This is a PUBLIC URL accessible from any browser, not a sandbox or internal URL: {url}",
+            )
+        )
     if svg_for_image and not _http_transport:
         blocks.append(_svg_to_image_content(svg_for_image, circuit_id=circuit_id))
     return blocks
