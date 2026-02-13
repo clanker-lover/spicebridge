@@ -13,6 +13,7 @@ AI-powered circuit design through simulation — an [MCP](https://modelcontextpr
 - **Model wizard** — generate SPICE `.lib` models from datasheet parameters
 - **KiCad export** — output `.kicad_sch` schematics
 - **Web viewer** — interactive schematic viewer in the browser
+- **Cloud setup wizard** — one-command deployment with Cloudflare tunnels (`spicebridge setup-cloud`)
 - **Spec verification** — compare results against design targets
 
 ## Install
@@ -47,6 +48,17 @@ Add to your `.mcp.json`:
 ```bash
 spicebridge --transport streamable-http --port 8000
 ```
+
+### Cloud Setup Wizard
+
+For guided Cloudflare tunnel setup:
+
+```bash
+spicebridge setup-cloud          # interactive (named tunnel)
+spicebridge setup-cloud --quick  # quick tunnel (no account needed)
+```
+
+Handles server startup, tunnel configuration, API key generation, and displays connection info when ready.
 
 ## Example
 
