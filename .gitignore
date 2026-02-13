@@ -9,3 +9,4 @@ dist/
 .env
 *.txt
 CONNECTOR_SUBMISSION_GUIDE.md
+security-audit/
