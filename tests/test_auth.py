@@ -15,9 +15,17 @@ def _homepage(request):
     return JSONResponse({"status": "ok"})
 
 
+def _schematic_handler(request):
+    return JSONResponse({"image": "png_data"})
+
+
 def _make_app(api_key: str = API_KEY) -> ApiKeyMiddleware:
     """Create a simple Starlette app wrapped with ApiKeyMiddleware."""
-    inner = Starlette(routes=[Route("/", _homepage), Route("/mcp", _homepage)])
+    inner = Starlette(routes=[
+        Route("/", _homepage),
+        Route("/mcp", _homepage),
+        Route("/schematics/{circuit_id}.png", _schematic_handler),
+    ])
     return ApiKeyMiddleware(inner, api_key)
 
 
@@ -55,3 +63,8 @@ class TestApiKeyMiddleware:
     def test_correct_key_on_mcp_path(self, client):
         resp = client.get("/mcp", headers={"Authorization": f"Bearer {API_KEY}"})
         assert resp.status_code == 200
+
+    def test_schematic_path_exempt_from_auth(self, client):
+        resp = client.get("/schematics/abc123.png")
+        assert resp.status_code == 200
+        assert resp.json() == {"image": "png_data"}

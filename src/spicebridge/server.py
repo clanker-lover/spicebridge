@@ -5,12 +5,15 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import shutil
 import time
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
+
+from starlette.responses import Response
 
 from spicebridge.circuit_manager import CircuitManager
 from spicebridge.composer import auto_detect_ports, compose_stages
@@ -58,6 +61,7 @@ from spicebridge.template_manager import (
     modify_component_in_netlist,
     substitute_params,
 )
+from spicebridge.schematic_cache import SchematicCache
 from spicebridge.web_viewer import get_viewer_server, start_viewer
 
 logger = logging.getLogger(__name__)
@@ -66,6 +70,7 @@ mcp = FastMCP("SPICEBridge")
 _manager = CircuitManager()
 _templates = TemplateManager()
 _models = ModelStore()
+_schematic_cache = SchematicCache()
 
 if not shutil.which("ngspice"):
     logger.warning(
@@ -100,10 +105,24 @@ def _resolve_model_includes(model_names: list[str]) -> str:
     return "\n".join(lines)
 
 
-def _svg_to_image_content(svg_content: str) -> ImageContent:
+def _get_base_url() -> str | None:
+    """Return the configured base URL for serving schematics, or None."""
+    url = os.environ.get("SPICEBRIDGE_BASE_URL", "").rstrip("/")
+    return url or None
+
+
+def _schematic_url(circuit_id: str) -> str | None:
+    """Return the public URL for a cached schematic PNG, or None."""
+    base = _get_base_url()
+    return f"{base}/schematics/{circuit_id}.png" if base else None
+
+
+def _svg_to_image_content(svg_content: str, circuit_id: str | None = None) -> ImageContent:
     """Convert SVG to PNG and return an MCP ImageContent block."""
     import cairosvg
     png_bytes = cairosvg.svg2png(bytestring=svg_content.encode("utf-8"))
+    if circuit_id is not None:
+        _schematic_cache.put(circuit_id, png_bytes)
     b64 = base64.b64encode(png_bytes).decode("ascii")
     return ImageContent(type="image", data=b64, mimeType="image/png")
 
@@ -111,6 +130,20 @@ def _svg_to_image_content(svg_content: str) -> ImageContent:
 def _error_content(error_dict: dict) -> list[TextContent]:
     """Wrap an error dict as a list containing a single TextContent block."""
     return [TextContent(type="text", text=json.dumps(error_dict))]
+
+
+@mcp.custom_route("/schematics/{circuit_id}.png", methods=["GET"])
+async def serve_schematic(request):
+    """Serve a cached schematic PNG over HTTP."""
+    circuit_id = request.path_params["circuit_id"]
+    png_bytes = _schematic_cache.get(circuit_id)
+    if png_bytes is None:
+        return Response(
+            content='{"error": "Schematic not found"}',
+            status_code=404,
+            media_type="application/json",
+        )
+    return Response(content=png_bytes, status_code=200, media_type="image/png")
 
 
 @mcp.tool()
@@ -325,6 +358,7 @@ def delete_circuit(circuit_id: str) -> dict:
         _manager.delete(circuit_id)
     except KeyError:
         return {"status": "error", "error": f"Circuit '{circuit_id}' not found"}
+    _schematic_cache.delete(circuit_id)
     return {"status": "ok"}
 
 
@@ -351,7 +385,10 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
             _draw_schematic(circuit.netlist, svg_file, fmt="svg")
             svg_content = svg_file.read_text(encoding="utf-8")
         metadata = {"status": "ok", "filepath": output_file.name, "format": fmt, "svg_content": svg_content}
-        return [TextContent(type="text", text=json.dumps(metadata)), _svg_to_image_content(svg_content)]
+        url = _schematic_url(circuit_id)
+        if url:
+            metadata["schematic_url"] = url
+        return [TextContent(type="text", text=json.dumps(metadata)), _svg_to_image_content(svg_content, circuit_id=circuit_id)]
     except Exception as e:
         return _error_content(safe_error_response(e, logger, "draw_schematic"))
 
@@ -1136,10 +1173,13 @@ def auto_design(
         pass  # schematic is best-effort; don't fail the design loop
 
     result["status"] = "ok"
+    url = _schematic_url(circuit_id)
+    if url:
+        result["schematic_url"] = url
 
     blocks: list = [TextContent(type="text", text=json.dumps(result, default=str))]
     if "svg_content" in result:
-        blocks.append(_svg_to_image_content(result["svg_content"]))
+        blocks.append(_svg_to_image_content(result["svg_content"], circuit_id=circuit_id))
     return blocks
 
 

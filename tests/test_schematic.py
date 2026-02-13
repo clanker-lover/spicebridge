@@ -7,10 +7,11 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from starlette.testclient import TestClient
 
 from mcp.types import ImageContent, TextContent
 from spicebridge.schematic import ParsedComponent, draw_schematic, parse_netlist
-from spicebridge.server import create_circuit
+from spicebridge.server import _schematic_cache, create_circuit, mcp
 from spicebridge.server import draw_schematic as server_draw_schematic
 
 
@@ -222,6 +223,59 @@ class TestSchematicIntegration:
         assert result_blocks[1].mimeType == "image/png"
         decoded = base64.b64decode(result_blocks[1].data)
         assert decoded[:4] == b'\x89PNG'
+
+
+    def test_schematic_url_present_when_env_set(self, monkeypatch):
+        monkeypatch.setenv("SPICEBRIDGE_BASE_URL", "https://mcp.example.com")
+        result = create_circuit(RC_LOWPASS)
+        cid = result["circuit_id"]
+
+        result_blocks = server_draw_schematic(cid, fmt="png")
+        schem = _extract_metadata(result_blocks)
+        assert schem["status"] == "ok"
+        assert "schematic_url" in schem
+        assert schem["schematic_url"] == f"https://mcp.example.com/schematics/{cid}.png"
+
+    def test_schematic_url_absent_when_env_unset(self, monkeypatch):
+        monkeypatch.delenv("SPICEBRIDGE_BASE_URL", raising=False)
+        result = create_circuit(RC_LOWPASS)
+        cid = result["circuit_id"]
+
+        result_blocks = server_draw_schematic(cid, fmt="png")
+        schem = _extract_metadata(result_blocks)
+        assert schem["status"] == "ok"
+        assert "schematic_url" not in schem
+
+
+class TestSchematicEndpoint:
+    """Tests for the /schematics/{circuit_id}.png HTTP endpoint."""
+
+    def _get_starlette_app(self):
+        """Build a Starlette app from FastMCP custom routes."""
+        from starlette.applications import Starlette
+
+        # _custom_starlette_routes contains Route objects directly
+        return Starlette(routes=list(mcp._custom_starlette_routes))
+
+    def test_serves_cached_png(self):
+        png_data = b"\x89PNG\r\n\x1a\nfake_png_data"
+        _schematic_cache.put("test123", png_data)
+        try:
+            app = self._get_starlette_app()
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/schematics/test123.png")
+            assert resp.status_code == 200
+            assert resp.headers["content-type"] == "image/png"
+            assert resp.content == png_data
+        finally:
+            _schematic_cache.delete("test123")
+
+    def test_returns_404_for_unknown_circuit(self):
+        app = self._get_starlette_app()
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/schematics/unknown999.png")
+        assert resp.status_code == 404
+        assert resp.json() == {"error": "Schematic not found"}
 
 
 def test_no_matplotlib_in_source():
