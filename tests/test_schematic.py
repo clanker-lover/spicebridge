@@ -235,6 +235,7 @@ class TestSchematicIntegration:
         assert schem["status"] == "ok"
         assert "schematic_url" in schem
         assert schem["schematic_url"] == f"https://mcp.example.com/schematics/{cid}.png"
+        assert "_assistant_hint" in schem
 
     def test_schematic_url_absent_when_env_unset(self, monkeypatch):
         monkeypatch.delenv("SPICEBRIDGE_BASE_URL", raising=False)
@@ -245,6 +246,7 @@ class TestSchematicIntegration:
         schem = _extract_metadata(result_blocks)
         assert schem["status"] == "ok"
         assert "schematic_url" not in schem
+        assert "_assistant_hint" not in schem
 
 
 class TestSchematicEndpoint:
