@@ -105,6 +105,9 @@ def _resolve_model_includes(model_names: list[str]) -> str:
     return "\n".join(lines)
 
 
+_http_transport: bool = False
+
+
 def _get_base_url() -> str | None:
     """Return the configured base URL for serving schematics, or None."""
     url = os.environ.get("SPICEBRIDGE_BASE_URL", "").rstrip("/")
@@ -389,7 +392,10 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
         if url:
             metadata["schematic_url"] = url
             metadata["_assistant_hint"] = f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link: {url}"
-        return [TextContent(type="text", text=json.dumps(metadata)), _svg_to_image_content(svg_content, circuit_id=circuit_id)]
+        blocks = [TextContent(type="text", text=json.dumps(metadata))]
+        if not _http_transport:
+            blocks.append(_svg_to_image_content(svg_content, circuit_id=circuit_id))
+        return blocks
     except Exception as e:
         return _error_content(safe_error_response(e, logger, "draw_schematic"))
 
@@ -1180,7 +1186,7 @@ def auto_design(
         result["_assistant_hint"] = f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link: {url}"
 
     blocks: list = [TextContent(type="text", text=json.dumps(result, default=str))]
-    if "svg_content" in result:
+    if "svg_content" in result and not _http_transport:
         blocks.append(_svg_to_image_content(result["svg_content"], circuit_id=circuit_id))
     return blocks
 
@@ -1582,6 +1588,8 @@ def run_worst_case(
 
 def configure_for_remote() -> None:
     """Disable DNS rebinding protection for tunnel/remote access."""
+    global _http_transport
+    _http_transport = True
     from mcp.server.transport_security import TransportSecuritySettings
 
     mcp.settings.transport_security = TransportSecuritySettings(
