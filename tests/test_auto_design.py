@@ -136,6 +136,6 @@ def test_auto_design_returns_svg_content():
     # Verify ImageContent block is present
     assert len(result_blocks) == 2
     assert isinstance(result_blocks[1], ImageContent)
-    assert result_blocks[1].mimeType == "image/svg+xml"
-    decoded = base64.b64decode(result_blocks[1].data).decode("utf-8")
-    assert decoded.lstrip().startswith(("<?xml", "<svg"))
+    assert result_blocks[1].mimeType == "image/png"
+    decoded = base64.b64decode(result_blocks[1].data)
+    assert decoded[:4] == b'\x89PNG'

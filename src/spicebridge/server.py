@@ -101,9 +101,11 @@ def _resolve_model_includes(model_names: list[str]) -> str:
 
 
 def _svg_to_image_content(svg_content: str) -> ImageContent:
-    """Base64-encode an SVG string and return an MCP ImageContent block."""
-    b64 = base64.b64encode(svg_content.encode("utf-8")).decode("ascii")
-    return ImageContent(type="image", data=b64, mimeType="image/svg+xml")
+    """Convert SVG to PNG and return an MCP ImageContent block."""
+    import cairosvg
+    png_bytes = cairosvg.svg2png(bytestring=svg_content.encode("utf-8"))
+    b64 = base64.b64encode(png_bytes).decode("ascii")
+    return ImageContent(type="image", data=b64, mimeType="image/png")
 
 
 def _error_content(error_dict: dict) -> list[TextContent]:
