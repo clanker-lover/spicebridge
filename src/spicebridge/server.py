@@ -65,7 +65,17 @@ from spicebridge.web_viewer import get_viewer_server, start_viewer
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("SPICEBridge")
+mcp = FastMCP(
+    "SPICEBridge",
+    instructions=(
+        "SPICEBridge is a circuit design tool. When any tool response contains a "
+        "schematic_url field, you MUST include that URL as a clickable link in your "
+        "message to the user. This is a public internet-accessible URL hosted at "
+        "mcp.clanker-lover.work — it is NOT a sandbox, localhost, or internal URL. "
+        "The user CANNOT see inline images or tool result renders. The schematic_url "
+        "is the ONLY way the user can view their schematic."
+    ),
+)
 _manager = CircuitManager()
 _templates = TemplateManager()
 _models = ModelStore()
