@@ -36,6 +36,18 @@ if ! command -v cloudflared &>/dev/null; then
     exit 1
 fi
 
+# Check for cloudflared config
+if [ ! -f "$HOME/.cloudflared/config.yml" ]; then
+    echo "ERROR: Cloudflare tunnel config not found at ~/.cloudflared/config.yml"
+    echo ""
+    echo "Run the setup wizard to create one:"
+    echo "  spicebridge setup-cloud"
+    echo ""
+    echo "Or for a quick tunnel (no config needed):"
+    echo "  spicebridge setup-cloud --quick"
+    exit 1
+fi
+
 # --- API key generation ---
 
 if [ -z "${SPICEBRIDGE_API_KEY:-}" ]; then

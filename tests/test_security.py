@@ -157,20 +157,27 @@ class TestSubprocessSafety:
             )
 
     def test_subprocess_has_timeout(self):
+        # Popen manages lifecycle via wait()/terminate(); timeout is not a
+        # constructor parameter, so only enforce for batch helpers.
+        _batch_funcs = {"run", "call", "check_call", "check_output"}
         for py_file, call_node in _iter_subprocess_calls():
+            func_name = call_node.func.attr
+            if func_name not in _batch_funcs:
+                continue
             kw_names = {kw.arg for kw in call_node.keywords}
             assert "timeout" in kw_names, (
                 f"{py_file.name}:{call_node.lineno} subprocess call missing timeout"
             )
 
     def test_only_simulator_imports_subprocess(self):
+        _allowed = {"simulator.py", "setup_wizard.py"}
         for py_file in sorted(_SRC_DIR.glob("**/*.py")):
             tree = ast.parse(py_file.read_text(), filename=str(py_file))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name == "subprocess":
-                            assert py_file.name == "simulator.py", (
+                            assert py_file.name in _allowed, (
                                 f"{py_file.name} imports subprocess"
                             )
                 elif (
@@ -178,7 +185,7 @@ class TestSubprocessSafety:
                     and node.module
                     and "subprocess" in node.module
                 ):
-                    assert py_file.name == "simulator.py", (
+                    assert py_file.name in _allowed, (
                         f"{py_file.name} imports from subprocess"
                     )
 

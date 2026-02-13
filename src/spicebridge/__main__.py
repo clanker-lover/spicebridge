@@ -25,7 +25,7 @@ def _run_with_auth(mcp, transport: str, host: str, port: int, api_key: str) -> N
     app = mcp.sse_app() if transport == "sse" else mcp.streamable_http_app()
     app = ApiKeyMiddleware(app, api_key)
 
-    log_level = getattr(mcp.settings, "log_level", "info")
+    log_level = getattr(mcp.settings, "log_level", "info").lower()
 
     async def _serve() -> None:
         config = uvicorn.Config(
@@ -41,9 +41,17 @@ def _run_with_auth(mcp, transport: str, host: str, port: int, api_key: str) -> N
 
 
 def main() -> None:
+    import sys
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "setup-cloud":
+        from spicebridge.setup_wizard import run_wizard
+
+        raise SystemExit(run_wizard(sys.argv[2:]))
+
     parser = argparse.ArgumentParser(
         prog="spicebridge",
         description="SPICEBridge MCP server for AI-powered circuit design",
+        epilog="Use 'spicebridge setup-cloud' for guided Cloudflare tunnel setup.",
     )
     parser.add_argument(
         "--transport",
