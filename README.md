@@ -34,7 +34,37 @@ pip install spicebridge
 
 ## Quick Start
 
-### Local (Claude Code / stdio)
+### Use the public server (no install needed)
+
+The fastest way to get started — no Python, no ngspice, nothing to install. Just add this to your MCP client config and start designing circuits:
+
+**Claude Desktop / Claude.ai** — add to your MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "SPICEBridge": {
+      "url": "https://spicebridge.clanker-lover.work/mcp"
+    }
+  }
+}
+```
+
+**Claude Code** — run this from any project directory:
+
+```bash
+claude mcp add --transport http SPICEBridge https://spicebridge.clanker-lover.work/mcp
+```
+
+That's it. You're ready to go.
+
+---
+
+### Self-hosted options
+
+If you'd rather run your own instance:
+
+#### Local (Claude Code / stdio)
 
 Add to your `.mcp.json`:
 
@@ -48,13 +78,13 @@ Add to your `.mcp.json`:
 }
 ```
 
-### Cloud (Streamable HTTP)
+#### Cloud (Streamable HTTP)
 
 ```bash
 spicebridge --transport streamable-http --port 8000
 ```
 
-### Cloud Setup Wizard
+#### Cloud Setup Wizard
 
 One command to go from a local install to a public MCP endpoint:
 
