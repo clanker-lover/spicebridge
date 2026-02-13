@@ -51,14 +51,32 @@ spicebridge --transport streamable-http --port 8000
 
 ### Cloud Setup Wizard
 
-For guided Cloudflare tunnel setup:
+One command to go from a local install to a public MCP endpoint:
 
 ```bash
-spicebridge setup-cloud          # interactive (named tunnel)
-spicebridge setup-cloud --quick  # quick tunnel (no account needed)
+spicebridge setup-cloud          # interactive (named tunnel, permanent URL)
+spicebridge setup-cloud --quick  # quick tunnel (temporary URL, no account needed)
 ```
 
-Handles server startup, tunnel configuration, API key generation, and displays connection info when ready.
+The wizard handles the full deployment pipeline:
+
+1. **Installs cloudflared** automatically (macOS via Homebrew, Linux via APT) if not found
+2. **Authenticates** with Cloudflare (browser-based OAuth, named tunnel mode only)
+3. **Creates or reuses a tunnel** — prompts to pick an existing one or make a new one
+4. **Configures DNS routing** for your custom domain (named tunnel mode)
+5. **Generates an API key** for authentication
+6. **Starts the SPICEBridge server** and tunnel together
+7. **Prints connection info** with a ready-to-paste JSON config for Claude.ai
+
+Quick tunnels give you a temporary `trycloudflare.com` URL instantly — no Cloudflare account required. Named tunnels give you a permanent custom domain (e.g. `spicebridge.example.com`).
+
+Additional options:
+
+```bash
+spicebridge setup-cloud --domain mcp.example.com  # specify custom domain
+spicebridge setup-cloud --port 9000                # custom port
+spicebridge setup-cloud --no-install               # skip cloudflared installation
+```
 
 ## Example
 
