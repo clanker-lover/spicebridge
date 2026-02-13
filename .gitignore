@@ -7,3 +7,4 @@ dist/
 *.raw
 *.log
 .env
+*.txt

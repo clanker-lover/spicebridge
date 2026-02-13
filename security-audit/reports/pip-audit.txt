@@ -1,8 +1,0 @@
-Name         Version ID             Fix Versions
------------- ------- -------------- ------------
-cryptography 46.0.4  CVE-2026-26007 46.0.5
-pip          24.0    CVE-2025-8869  25.3
-pip          24.0    CVE-2026-1703  26.0
-Name        Skip Reason
------------ --------------------------------------------------------------------------
-spicebridge Dependency not found on PyPI and could not be audited: spicebridge (0.1.0)
