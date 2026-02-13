@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import time
-from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent, ToolAnnotations
@@ -152,18 +151,20 @@ _favicon_png: bytes | None = None
 
 
 def _load_favicon() -> bytes | None:
-    """Load assets/logo.svg and convert to PNG for favicon use."""
+    """Load the bundled logo SVG and convert to PNG for favicon use."""
     global _favicon_png
     if _favicon_png is not None:
         return _favicon_png
-    svg_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo.svg"
-    if not svg_path.is_file():
-        return None
+    import importlib.resources
+
     import cairosvg
 
-    _favicon_png = cairosvg.svg2png(
-        url=str(svg_path), output_width=64, output_height=64
-    )
+    try:
+        ref = importlib.resources.files("spicebridge.static").joinpath("logo.svg")
+        svg_data = ref.read_bytes()
+    except (FileNotFoundError, ModuleNotFoundError, TypeError):
+        return None
+    _favicon_png = cairosvg.svg2png(bytestring=svg_data, output_width=64, output_height=64)
     return _favicon_png
 
 
