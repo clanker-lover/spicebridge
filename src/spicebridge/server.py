@@ -388,7 +388,7 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
         url = _schematic_url(circuit_id)
         if url:
             metadata["schematic_url"] = url
-            metadata["_assistant_hint"] = "IMPORTANT: Share the schematic_url link with the user so they can view the schematic in their browser."
+            metadata["_assistant_hint"] = f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link: {url}"
         return [TextContent(type="text", text=json.dumps(metadata)), _svg_to_image_content(svg_content, circuit_id=circuit_id)]
     except Exception as e:
         return _error_content(safe_error_response(e, logger, "draw_schematic"))
@@ -1177,7 +1177,7 @@ def auto_design(
     url = _schematic_url(circuit_id)
     if url:
         result["schematic_url"] = url
-        result["_assistant_hint"] = "IMPORTANT: Share the schematic_url link with the user so they can view the schematic in their browser."
+        result["_assistant_hint"] = f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link: {url}"
 
     blocks: list = [TextContent(type="text", text=json.dumps(result, default=str))]
     if "svg_content" in result:
