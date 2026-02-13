@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "spicebridge": {
-      "command": "/home/brandonwadelightner/spicebridge/.venv/bin/python",
-      "args": ["-m", "spicebridge.server"]
-    }
-  }
-}

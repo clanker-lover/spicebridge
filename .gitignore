@@ -10,3 +10,5 @@ dist/
 *.txt
 CONNECTOR_SUBMISSION_GUIDE.md
 security-audit/
+.mcp.json
+.claude/
