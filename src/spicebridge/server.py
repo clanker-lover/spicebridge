@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import logging
 import os
@@ -48,8 +49,14 @@ from spicebridge.sanitize import (
 )
 from spicebridge.schematic import draw_schematic as _draw_schematic
 from spicebridge.schematic import parse_netlist
+from spicebridge.metrics import ServerMetrics
 from spicebridge.schematic_cache import SchematicCache
-from spicebridge.simulator import run_simulation, validate_netlist_syntax
+from spicebridge.simulator import (
+    SimulationQueueFull,
+    get_sim_queue_depth,
+    run_simulation as _orig_run_simulation,
+    validate_netlist_syntax,
+)
 from spicebridge.solver import solve as _solve_components
 from spicebridge.standard_values import (
     format_engineering,
@@ -80,6 +87,58 @@ _manager = CircuitManager()
 _templates = TemplateManager()
 _models = ModelStore()
 _schematic_cache = SchematicCache()
+
+_MAX_RPM = int(os.environ.get("SPICEBRIDGE_MAX_RPM", "60"))
+_metrics = ServerMetrics(max_rpm=_MAX_RPM)
+
+# Tools whose return type is list[TextContent] (need special error format)
+_LIST_RETURN_TOOLS = frozenset({"draw_schematic", "auto_design"})
+
+
+def run_simulation(netlist: str, output_dir=None) -> bool:
+    """Wrapper that tracks simulation metrics around the real run_simulation."""
+    _metrics.record_sim_start()
+    t0 = time.monotonic()
+    try:
+        return _orig_run_simulation(netlist, output_dir)
+    finally:
+        duration_ms = (time.monotonic() - t0) * 1000
+        _metrics.record_sim_end(duration_ms)
+
+
+def _monitored(fn):
+    """Decorator that adds metrics, RPM throttling, and logging to tool functions."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        name = fn.__name__
+        _metrics.record_request(name)
+        if _http_transport and not _metrics.check_rpm():
+            _metrics.record_rejection()
+            logger.info("tool=%s rejected=rpm_exceeded", name)
+            err = {
+                "status": "error",
+                "error": "Rate limit exceeded. Please retry in a moment.",
+            }
+            if name in _LIST_RETURN_TOOLS:
+                return _error_content(err)
+            return err
+        t0 = time.monotonic()
+        try:
+            return fn(*args, **kwargs)
+        except SimulationQueueFull as e:
+            _metrics.record_rejection()
+            logger.info("tool=%s rejected=queue_full", name)
+            err = {"status": "error", "error": str(e)}
+            if name in _LIST_RETURN_TOOLS:
+                return _error_content(err)
+            return err
+        finally:
+            duration_ms = (time.monotonic() - t0) * 1000
+            logger.info("tool=%s duration=%.0fms", name, duration_ms)
+
+    return wrapper
+
 
 if not shutil.which("ngspice"):
     logger.warning(
@@ -191,6 +250,22 @@ async def serve_schematic(request):
     return Response(content=png_bytes, status_code=200, media_type="image/png")
 
 
+@mcp.custom_route("/health", methods=["GET"])
+async def health_endpoint(request):
+    """Return server metrics as JSON. Exempt from API key auth."""
+    from spicebridge.simulator import get_sim_queue_depth as _gsqd
+
+    data = _metrics.snapshot()
+    data["status"] = "ok"
+    data["schematic_cache"] = _schematic_cache.stats()
+    data["sim_queue_depth"] = _gsqd()
+    return Response(
+        content=json.dumps(data),
+        status_code=200,
+        media_type="application/json",
+    )
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Create Circuit",
@@ -200,6 +275,7 @@ async def serve_schematic(request):
         openWorldHint=False,
     )
 )
+@_monitored
 def create_circuit(netlist: str, models: list[str] | None = None) -> dict:
     """Store a SPICE netlist and return a circuit ID for subsequent analyses."""
     if len(netlist) > _MAX_NETLIST_SIZE:
@@ -253,6 +329,7 @@ def create_circuit(netlist: str, models: list[str] | None = None) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def run_ac_analysis(
     circuit_id: str,
     start_freq: float = 1.0,
@@ -309,6 +386,7 @@ def run_ac_analysis(
         openWorldHint=False,
     )
 )
+@_monitored
 def run_transient(
     circuit_id: str,
     stop_time: float,
@@ -370,6 +448,7 @@ def run_transient(
         openWorldHint=False,
     )
 )
+@_monitored
 def run_dc_op(circuit_id: str) -> dict:
     """Run DC operating point analysis on a stored circuit."""
     try:
@@ -419,6 +498,7 @@ def _summarize_results(data: object) -> object:
         openWorldHint=False,
     )
 )
+@_monitored
 def get_results(circuit_id: str, summary: bool = True) -> dict:
     """Return the last simulation results for a circuit."""
     try:
@@ -445,6 +525,7 @@ def get_results(circuit_id: str, summary: bool = True) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def delete_circuit(circuit_id: str) -> dict:
     """Delete a stored circuit and clean up its output directory."""
     try:
@@ -464,6 +545,7 @@ def delete_circuit(circuit_id: str) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
     """Generate a schematic diagram from a stored circuit's netlist.
 
@@ -536,6 +618,7 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
         openWorldHint=False,
     )
 )
+@_monitored
 def export_kicad(circuit_id: str, filename: str | None = None) -> dict:
     """Export circuit as KiCad 8 schematic (.kicad_sch) file."""
     try:
@@ -572,6 +655,7 @@ def export_kicad(circuit_id: str, filename: str | None = None) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def open_viewer(circuit_id: str | None = None, port: int = 8080) -> dict:
     """Start the interactive web schematic viewer and return its URL."""
     if not (1024 <= port <= 65535):
@@ -601,6 +685,7 @@ def open_viewer(circuit_id: str | None = None, port: int = 8080) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def set_ports(circuit_id: str, ports: dict) -> dict:
     """Store port definitions for a circuit.
 
@@ -633,6 +718,7 @@ def set_ports(circuit_id: str, ports: dict) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def get_ports(circuit_id: str) -> dict:
     """Return port definitions for a circuit, auto-detecting if none are set."""
     try:
@@ -658,6 +744,7 @@ def get_ports(circuit_id: str) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def connect_stages(
     stages: list[dict],
     connections: list[dict] | None = None,
@@ -748,6 +835,7 @@ def connect_stages(
         openWorldHint=False,
     )
 )
+@_monitored
 def list_templates(category: str | None = None) -> dict:
     """List available circuit templates, optionally filtered by category."""
     templates = _templates.list_templates(category=category)
@@ -763,6 +851,7 @@ def list_templates(category: str | None = None) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def load_template(
     template_id: str,
     params: dict | None = None,
@@ -854,6 +943,7 @@ def load_template(
         openWorldHint=False,
     )
 )
+@_monitored
 def modify_component(circuit_id: str, component: str, value: str) -> dict:
     """Modify a component value in a stored circuit's netlist."""
     try:
@@ -892,6 +982,7 @@ def modify_component(circuit_id: str, component: str, value: str) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def validate_netlist(circuit_id: str) -> dict:
     """Validate the netlist syntax of a stored circuit using ngspice."""
     try:
@@ -1041,6 +1132,7 @@ def _check_spec(actual: float | None, spec_def: dict) -> tuple[bool, dict]:
         openWorldHint=False,
     )
 )
+@_monitored
 def measure_bandwidth(circuit_id: str, threshold_db: float = -3.0) -> dict:
     """Measure the bandwidth (cutoff frequency) of an AC analysis result.
 
@@ -1085,6 +1177,7 @@ def measure_bandwidth(circuit_id: str, threshold_db: float = -3.0) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def measure_gain(circuit_id: str, frequency_hz: float) -> dict:
     """Measure gain and phase at a specific frequency from AC analysis results."""
     if frequency_hz <= 0:
@@ -1118,6 +1211,7 @@ def measure_gain(circuit_id: str, frequency_hz: float) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def measure_dc(circuit_id: str, node_name: str) -> dict:
     """Measure the DC voltage at a specific node from operating point results."""
     check = _require_results(circuit_id, "Operating Point")
@@ -1151,6 +1245,7 @@ def measure_dc(circuit_id: str, node_name: str) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def measure_transient(circuit_id: str) -> dict:
     """Extract key transient response metrics (rise time, settling time, overshoot)."""
     check = _require_results(circuit_id, "Transient Analysis")
@@ -1179,6 +1274,7 @@ def measure_transient(circuit_id: str) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def measure_power(circuit_id: str) -> dict:
     """Measure power consumption from DC operating point results."""
     check = _require_results(circuit_id, "Operating Point")
@@ -1230,6 +1326,7 @@ def measure_power(circuit_id: str) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def compare_specs(circuit_id: str, specs: dict) -> dict:
     """Compare simulation results against design specifications.
 
@@ -1275,6 +1372,7 @@ def compare_specs(circuit_id: str, specs: dict) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def calculate_components(topology_id: str, specs: dict) -> dict:
     """Calculate component values for a circuit topology from target specs."""
     try:
@@ -1366,6 +1464,7 @@ def _collect_measurements(circuit_id: str, sim_type: str, specs: dict) -> dict:
         openWorldHint=False,
     )
 )
+@_monitored
 def auto_design(
     template_id: str,
     specs: dict,
@@ -1494,6 +1593,7 @@ def auto_design(
         openWorldHint=False,
     )
 )
+@_monitored
 def create_model(
     component_type: str,
     name: str,
@@ -1531,6 +1631,7 @@ def create_model(
         openWorldHint=False,
     )
 )
+@_monitored
 def list_models() -> dict:
     """Return all saved SPICE models from the model library."""
     return {
@@ -1697,6 +1798,7 @@ def _solve_and_snap(
         openWorldHint=False,
     )
 )
+@_monitored
 def run_monte_carlo(
     circuit_id: str,
     analysis_type: str,
@@ -1811,6 +1913,7 @@ def run_monte_carlo(
         openWorldHint=False,
     )
 )
+@_monitored
 def run_worst_case(
     circuit_id: str,
     analysis_type: str,
@@ -1920,6 +2023,16 @@ def configure_for_remote() -> None:
 
     mcp.settings.transport_security = TransportSecuritySettings(
         enable_dns_rebinding_protection=False
+    )
+
+    from spicebridge.simulator import _MAX_CONCURRENT_SIMS, _MAX_SIM_QUEUE
+
+    logger.info(
+        "SPICEBridge starting in remote mode — "
+        "max_rpm=%d, max_concurrent_sims=%d, max_sim_queue=%d",
+        _MAX_RPM,
+        _MAX_CONCURRENT_SIMS,
+        _MAX_SIM_QUEUE,
     )
 
 

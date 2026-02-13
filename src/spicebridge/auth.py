@@ -32,8 +32,8 @@ class ApiKeyMiddleware:
 
         request = Request(scope)
 
-        # Exempt schematic image serving from auth (browser-clickable URLs)
-        if request.url.path.startswith("/schematics/"):
+        # Exempt schematic image serving and health endpoint from auth
+        if request.url.path.startswith("/schematics/") or request.url.path == "/health":
             await self.app(scope, receive, send)
             return
 

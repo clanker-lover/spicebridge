@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import os
 import shutil
 import subprocess  # nosec B404 — used with list args, no shell=True
 import tempfile
@@ -13,8 +14,28 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _SIMULATION_TIMEOUT = 60
-_MAX_CONCURRENT_SIMS = 4
+_MAX_CONCURRENT_SIMS = int(os.environ.get("SPICEBRIDGE_MAX_CONCURRENT_SIMS", "3"))
+_MAX_SIM_QUEUE = int(os.environ.get("SPICEBRIDGE_MAX_SIM_QUEUE", "5"))
+
 _sim_semaphore = threading.Semaphore(_MAX_CONCURRENT_SIMS)
+
+# Queue depth tracking — how many threads are waiting for the semaphore
+_queue_depth = 0
+_queue_lock = threading.Lock()
+
+
+def get_sim_queue_depth() -> int:
+    """Return the number of requests currently waiting for a simulation slot."""
+    with _queue_lock:
+        return _queue_depth
+
+
+def get_active_sims() -> int:
+    """Return the number of currently running simulations.
+
+    Computed as: max_concurrent - semaphore._value (available slots).
+    """
+    return _MAX_CONCURRENT_SIMS - _sim_semaphore._value
 
 
 def _check_ngspice() -> bool:
@@ -78,6 +99,10 @@ def _do_simulation(netlist: str, output_dir: Path) -> bool:
     return _run_via_subprocess(netlist_file, raw_file)
 
 
+class SimulationQueueFull(Exception):
+    """Raised when the simulation queue has reached its maximum depth."""
+
+
 def run_simulation(netlist: str, output_dir: str | Path | None = None) -> bool:
     """Run an ngspice simulation on the given netlist string.
 
@@ -97,6 +122,8 @@ def run_simulation(netlist: str, output_dir: str | Path | None = None) -> bool:
     ------
     RuntimeError
         If ngspice is not installed / not on PATH.
+    SimulationQueueFull
+        If too many requests are already queued for simulation.
     """
     if not _check_ngspice():
         raise RuntimeError(
@@ -104,17 +131,36 @@ def run_simulation(netlist: str, output_dir: str | Path | None = None) -> bool:
             "Install it with: sudo apt install ngspice"
         )
 
-    _sim_semaphore.acquire()
+    # Check queue depth before blocking on semaphore
+    global _queue_depth
+    with _queue_lock:
+        if _queue_depth >= _MAX_SIM_QUEUE:
+            raise SimulationQueueFull(
+                "Server is at capacity. Please retry in a moment."
+            )
+        _queue_depth += 1
+
     try:
-        if output_dir is None:
-            with tempfile.TemporaryDirectory(prefix="spicebridge_") as tmpdir:
-                return _do_simulation(netlist, Path(tmpdir))
-        else:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            return _do_simulation(netlist, output_dir)
-    finally:
-        _sim_semaphore.release()
+        _sim_semaphore.acquire()
+        with _queue_lock:
+            _queue_depth -= 1
+        try:
+            if output_dir is None:
+                with tempfile.TemporaryDirectory(prefix="spicebridge_") as tmpdir:
+                    return _do_simulation(netlist, Path(tmpdir))
+            else:
+                output_dir = Path(output_dir)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                return _do_simulation(netlist, output_dir)
+        finally:
+            _sim_semaphore.release()
+    except SimulationQueueFull:
+        raise
+    except BaseException:
+        # If we fail before acquiring the semaphore, decrement queue depth
+        with _queue_lock:
+            _queue_depth = max(0, _queue_depth - 1)
+        raise
 
 
 def validate_netlist_syntax(netlist: str) -> tuple[bool, list[str]]:
