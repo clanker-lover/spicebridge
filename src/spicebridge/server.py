@@ -392,6 +392,9 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
         if url:
             metadata["schematic_url"] = url
             metadata["_assistant_hint"] = f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link: {url}"
+        if _http_transport:
+            metadata.pop("svg_content", None)
+            metadata.pop("filepath", None)
         blocks = [TextContent(type="text", text=json.dumps(metadata))]
         if not _http_transport:
             blocks.append(_svg_to_image_content(svg_content, circuit_id=circuit_id))
@@ -1185,9 +1188,13 @@ def auto_design(
         result["schematic_url"] = url
         result["_assistant_hint"] = f"IMPORTANT: ALWAYS share this URL with the user in your response. Inline images are NOT visible to them in Claude.ai. The user can ONLY see the schematic if you include this link: {url}"
 
+    if _http_transport:
+        svg_for_image = result.pop("svg_content", None)
+    else:
+        svg_for_image = result.get("svg_content")
     blocks: list = [TextContent(type="text", text=json.dumps(result, default=str))]
-    if "svg_content" in result and not _http_transport:
-        blocks.append(_svg_to_image_content(result["svg_content"], circuit_id=circuit_id))
+    if svg_for_image and not _http_transport:
+        blocks.append(_svg_to_image_content(svg_for_image, circuit_id=circuit_id))
     return blocks
 
 
