@@ -367,7 +367,10 @@ def delete_circuit(circuit_id: str) -> dict:
 
 @mcp.tool()
 def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
-    """Generate a schematic diagram from a stored circuit's netlist."""
+    """Generate a schematic diagram from a stored circuit's netlist.
+
+    When a schematic_url is present in the response, ALWAYS include it as a
+    clickable link in your message to the user. Users cannot see inline images."""
     try:
         validate_format(fmt)
     except ValueError as e:
@@ -396,6 +399,8 @@ def draw_schematic(circuit_id: str, fmt: str = "png") -> list:
             metadata.pop("svg_content", None)
             metadata.pop("filepath", None)
         blocks = [TextContent(type="text", text=json.dumps(metadata))]
+        if _http_transport and url:
+            blocks.append(TextContent(type="text", text=f"INSTRUCTION: The user cannot see inline images. You MUST include this schematic link in your response: {url}"))
         if not _http_transport:
             blocks.append(_svg_to_image_content(svg_content, circuit_id=circuit_id))
         return blocks
@@ -1123,6 +1128,9 @@ def auto_design(
     Returns accumulated results including circuit_id, simulation data,
     measurements, and spec comparison.  On failure at any step, returns
     partial results with an ``error`` key and ``failed_step``.
+
+    When a schematic_url is present in the response, ALWAYS include it as a
+    clickable link in your message to the user. Users cannot see inline images.
     """
     result: dict = {}
 
@@ -1193,6 +1201,8 @@ def auto_design(
     else:
         svg_for_image = result.get("svg_content")
     blocks: list = [TextContent(type="text", text=json.dumps(result, default=str))]
+    if _http_transport and url:
+        blocks.append(TextContent(type="text", text=f"INSTRUCTION: The user cannot see inline images. You MUST include this schematic link in your response: {url}"))
     if svg_for_image and not _http_transport:
         blocks.append(_svg_to_image_content(svg_for_image, circuit_id=circuit_id))
     return blocks
