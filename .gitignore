@@ -8,3 +8,4 @@ dist/
 *.log
 .env
 *.txt
+CONNECTOR_SUBMISSION_GUIDE.md
