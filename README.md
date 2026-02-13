@@ -1,5 +1,10 @@
 # SPICEBridge
 
+
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/235461c1-122a-41bb-b802-cb6055fb8387" />
+
+
+
 AI-powered circuit design through simulation — an [MCP](https://modelcontextprotocol.io/) server that gives language models direct access to SPICE circuit simulation via ngspice. Describe a circuit in plain English and let the AI handle netlist generation, simulation, measurement, and spec verification.
 
 ## Features
