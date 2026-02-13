@@ -252,7 +252,23 @@ async def serve_schematic(request):
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_endpoint(request):
-    """Return server metrics as JSON. Exempt from API key auth."""
+    """Return server metrics as JSON. Exempt from API key auth.
+
+    Protected by ``SPICEBRIDGE_HEALTH_TOKEN`` env var.  If the var is
+    unset or empty the endpoint returns 404 for all requests.  When set,
+    callers must supply ``?token=<value>``; mismatches also yield 404
+    (never 401/403) to avoid revealing the endpoint exists.
+    """
+    import hmac
+
+    expected = os.environ.get("SPICEBRIDGE_HEALTH_TOKEN", "")
+    if not expected:
+        return Response(status_code=404)
+
+    provided = request.query_params.get("token", "")
+    if not provided or not hmac.compare_digest(provided, expected):
+        return Response(status_code=404)
+
     from spicebridge.simulator import get_sim_queue_depth as _gsqd
 
     data = _metrics.snapshot()
