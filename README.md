@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/clanker-lover-spicebridge-badge.png)](https://mseep.ai/app/clanker-lover-spicebridge)
+
 # SPICEBridge
 
 
