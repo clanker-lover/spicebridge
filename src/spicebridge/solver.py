@@ -326,27 +326,28 @@ def _solve_sallen_key_hpf_2nd(specs: dict) -> dict:
 
     notes: list[str] = []
 
-    # Equal-R design: R1 = R2 = R, C1 = 4*Q^2 * C2
-    c2 = _pick_c_anchor(f_c)
-    c1 = 4.0 * q * q * c2
-    r = 1.0 / (2.0 * math.pi * f_c * math.sqrt(c1 * c2))
+    # Equal-C design: C1 = C2 = C, R2 = 4*Q^2 * R1. (Equal R cannot reach
+    # Butterworth here: Q = sqrt(C1*C2) / (C1 + C2) <= 0.5.)
+    c = _pick_c_anchor(f_c)
+    # f_c = 1 / (2*pi*C*sqrt(R1*R2)) = 1 / (2*pi*C*2*Q*R1)
+    r1 = 1.0 / (4.0 * math.pi * f_c * q * c)
+    r2 = 4.0 * q * q * r1
 
-    notes.append(f"Equal-R design with Q={q}.")
-    c1_fmt = format_engineering(c1)
-    c2_fmt = format_engineering(c2)
-    notes.append(f"C2 chosen as {c2_fmt}F, C1 = 4*Q^2*C2 = {c1_fmt}F.")
+    notes.append(f"Equal-C design with Q={q}.")
+    c_fmt = format_engineering(c)
+    notes.append(f"C1 = C2 = {c_fmt}F, R2 = 4*Q^2*R1.")
 
-    _check_resistor(r, "R1", notes)
-    _check_capacitor(c1, "C1", notes)
-    _check_capacitor(c2, "C2", notes)
+    _check_resistor(r1, "R1", notes)
+    _check_resistor(r2, "R2", notes)
+    _check_capacitor(c, "C1", notes)
 
-    raw = {"R1": r, "R2": r, "C1": c1, "C2": c2}
+    raw = {"R1": r1, "R2": r2, "C1": c, "C2": c}
     return {
         "components": {
-            "R1": format_engineering(r),
-            "R2": format_engineering(r),
-            "C1": format_engineering(c1),
-            "C2": format_engineering(c2),
+            "R1": format_engineering(r1),
+            "R2": format_engineering(r2),
+            "C1": format_engineering(c),
+            "C2": format_engineering(c),
         },
         "equations_used": {
             "f_cutoff": "1 / (2 * pi * sqrt(R1 * R2 * C1 * C2))",

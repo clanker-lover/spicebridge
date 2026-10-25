@@ -185,6 +185,14 @@ class TestSallenKeyLowpass2nd:
         # C1 = 4*Q^2*C2 = 4*C2 when Q=1
         assert c1 / c2 == pytest.approx(4.0, rel=0.01)
 
+    @pytest.mark.parametrize("q", [0.5, 0.707, 1.0, 2.0])
+    def test_q_equation(self, q):
+        """The result meets Q = sqrt(R1*R2*C1*C2) / (C2*(R1 + R2))."""
+        result = solve("sallen_key_lowpass_2nd", {"f_cutoff_hz": 1000, "Q": q})
+        r1, r2, c1, c2 = _parse_sallen_all(result)
+        q_calc = math.sqrt(r1 * r2 * c1 * c2) / (c2 * (r1 + r2))
+        assert q_calc == pytest.approx(q, rel=0.01)
+
     def test_missing_spec(self):
         with pytest.raises(ValueError, match="requires"):
             solve("sallen_key_lowpass_2nd", {})
@@ -331,21 +339,16 @@ class TestMFBBandpass:
 
 
 class TestSallenKeyHPF2nd:
-    def test_butterworth_1khz(self):
+    def test_equal_c(self):
         result = solve("sallen_key_hpf_2nd", {"f_cutoff_hz": 1000})
         c = result["components"]
-        assert c["R1"] == c["R2"]
+        assert c["C1"] == c["C2"]
 
-    def test_equal_r(self):
+    def test_r_ratio(self):
+        """For Butterworth Q=0.707: R2 ~ 2*R1."""
         result = solve("sallen_key_hpf_2nd", {"f_cutoff_hz": 1000})
-        c = result["components"]
-        assert c["R1"] == c["R2"]
-
-    def test_c_ratio(self):
-        """For Butterworth Q=0.707: C1 ~ 2*C2."""
-        result = solve("sallen_key_hpf_2nd", {"f_cutoff_hz": 1000})
-        c1, c2 = _parse_hpf_caps(result)
-        assert c1 / c2 == pytest.approx(2.0, rel=0.01)
+        r1, r2, _, _ = _parse_sallen_all(result)
+        assert r2 / r1 == pytest.approx(2.0, rel=0.01)
 
     def test_cutoff_equation(self):
         """Verify f_c = 1/(2*pi*sqrt(R1*R2*C1*C2))."""
@@ -354,10 +357,19 @@ class TestSallenKeyHPF2nd:
         f_calc = 1.0 / (2 * math.pi * math.sqrt(r1 * r2 * c1 * c2))
         assert f_calc == pytest.approx(1000, rel=0.01)
 
+    @pytest.mark.parametrize("q", [0.5, 0.707, 1.0, 2.0])
+    def test_q_equation(self, q):
+        """The result meets Q = sqrt(R1*R2*C1*C2) / (R1*(C1 + C2))."""
+        result = solve("sallen_key_hpf_2nd", {"f_cutoff_hz": 1000, "Q": q})
+        r1, r2, c1, c2 = _parse_sallen_all(result)
+        q_calc = math.sqrt(r1 * r2 * c1 * c2) / (r1 * (c1 + c2))
+        assert q_calc == pytest.approx(q, rel=0.01)
+
     def test_custom_q(self):
         result = solve("sallen_key_hpf_2nd", {"f_cutoff_hz": 1000, "Q": 1.0})
-        c1, c2 = _parse_hpf_caps(result)
-        assert c1 / c2 == pytest.approx(4.0, rel=0.01)
+        r1, r2, _, _ = _parse_sallen_all(result)
+        # R2 = 4*Q^2*R1 = 4*R1 when Q=1
+        assert r2 / r1 == pytest.approx(4.0, rel=0.01)
 
     def test_missing_spec(self):
         with pytest.raises(ValueError, match="requires"):
@@ -619,11 +631,6 @@ def _parse_mfb(
         _parse_eng(c["C1"]),
         _parse_eng(c["C2"]),
     )
-
-
-def _parse_hpf_caps(result: dict) -> tuple[float, float]:
-    c = result["components"]
-    return _parse_eng(c["C1"]), _parse_eng(c["C2"])
 
 
 def _parse_twin_t(
