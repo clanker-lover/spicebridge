@@ -49,32 +49,35 @@ class Wire:
 # Symbol mapping
 # ---------------------------------------------------------------------------
 
+# pin_numbers follow SPICE node order (e.g. Q: C B E, M: D G S, D: A K).
+# pin_offsets are the pin positions of the matching _LIB_SYMBOL_TEMPLATES
+# entry converted to schematic coordinates (Y down, i.e. lib y negated).
 _SYMBOL_MAP: dict[str, KiCadSymbolInfo] = {
     "R": KiCadSymbolInfo("Device:R", ["1", "2"], [(0, -3.81), (0, 3.81)]),
     "C": KiCadSymbolInfo("Device:C", ["1", "2"], [(0, -2.54), (0, 2.54)]),
     "L": KiCadSymbolInfo("Device:L", ["1", "2"], [(0, -3.81), (0, 3.81)]),
-    "D": KiCadSymbolInfo("Device:D", ["K", "A"], [(0, -2.54), (0, 2.54)]),
+    "D": KiCadSymbolInfo("Device:D", ["A", "K"], [(2.54, 0), (-2.54, 0)]),
     "V": KiCadSymbolInfo("Simulation_SPICE:VDC", ["1", "2"], [(0, -3.81), (0, 3.81)]),
     "I": KiCadSymbolInfo("Simulation_SPICE:IDC", ["1", "2"], [(0, -3.81), (0, 3.81)]),
     "Q_NPN": KiCadSymbolInfo(
         "Device:Q_NPN_BCE",
-        ["B", "C", "E"],
-        [(-2.54, 0), (0, -2.54), (0, 2.54)],
+        ["C", "B", "E"],
+        [(2.54, -2.54), (-2.54, 0), (2.54, 2.54)],
     ),
     "Q_PNP": KiCadSymbolInfo(
         "Device:Q_PNP_BCE",
-        ["B", "C", "E"],
-        [(-2.54, 0), (0, -2.54), (0, 2.54)],
+        ["C", "B", "E"],
+        [(2.54, -2.54), (-2.54, 0), (2.54, 2.54)],
     ),
     "M_NMOS": KiCadSymbolInfo(
         "Device:Q_NMOS_GDS",
-        ["G", "D", "S"],
-        [(-2.54, 0), (0, -2.54), (0, 2.54)],
+        ["D", "G", "S"],
+        [(2.54, -2.54), (-2.54, 0), (2.54, 2.54)],
     ),
     "M_PMOS": KiCadSymbolInfo(
         "Device:Q_PMOS_GDS",
-        ["G", "D", "S"],
-        [(-2.54, 0), (0, -2.54), (0, 2.54)],
+        ["D", "G", "S"],
+        [(2.54, -2.54), (-2.54, 0), (2.54, 2.54)],
     ),
 }
 
@@ -90,12 +93,12 @@ def _resolve_symbol_info(comp_type: str, value: str) -> KiCadSymbolInfo:
             return _SYMBOL_MAP["M_PMOS"]
         return _SYMBOL_MAP["M_NMOS"]
     if comp_type == "X":
-        # Generic subcircuit — create a box with variable pin count
-        pin_numbers = [str(i + 1) for i in range(10)]
+        # Generic subcircuit — box with 5 pins on the left edge
+        pin_numbers = [str(i + 1) for i in range(5)]
         return KiCadSymbolInfo(
             "Simulation_SPICE:SUBCKT",
             pin_numbers,
-            [(0, i * 2.54) for i in range(10)],
+            [(-7.62, -5.08 + i * 2.54) for i in range(5)],
         )
     if comp_type in _SYMBOL_MAP:
         return _SYMBOL_MAP[comp_type]
@@ -116,7 +119,12 @@ _Y_SPACING = 15.24
 
 def _snap_to_grid(val: float) -> float:
     """Round a value to the nearest KiCad grid point."""
-    return round(val / _GRID) * _GRID
+    return _mm(round(val / _GRID) * _GRID)
+
+
+def _mm(val: float) -> float:
+    """Round a coordinate to 1 µm to strip floating-point noise."""
+    return round(val, 4) + 0.0
 
 
 def _layout_components(
@@ -166,20 +174,27 @@ def _layout_components(
 def _pin_positions(
     placed: PlacedComponent,
 ) -> list[tuple[float, float]]:
-    """Compute absolute pin positions for a placed component."""
+    """Compute absolute pin positions for a placed component.
+
+    Pin offsets are in schematic coordinates (Y down). KiCad rotates symbols
+    counter-clockwise on screen, which in Y-down coordinates is
+    (x, y) -> (x*cos + y*sin, -x*sin + y*cos). Positions are not snapped to
+    the grid: many pins sit on 1.27 mm half-grid points and wires must end
+    exactly on them to connect.
+    """
     import math
 
     angle_rad = math.radians(placed.rotation)
-    cos_a = math.cos(angle_rad)
-    sin_a = math.sin(angle_rad)
+    cos_a = round(math.cos(angle_rad), 9)
+    sin_a = round(math.sin(angle_rad), 9)
 
     positions: list[tuple[float, float]] = []
     n_pins = min(len(placed.component.nodes), len(placed.symbol_info.pin_offsets))
     for i in range(n_pins):
         dx, dy = placed.symbol_info.pin_offsets[i]
-        rx = dx * cos_a - dy * sin_a
-        ry = dx * sin_a + dy * cos_a
-        positions.append((_snap_to_grid(placed.x + rx), _snap_to_grid(placed.y + ry)))
+        rx = dx * cos_a + dy * sin_a
+        ry = -dx * sin_a + dy * cos_a
+        positions.append((_mm(placed.x + rx), _mm(placed.y + ry)))
 
     return positions
 
@@ -189,6 +204,102 @@ def _pin_positions(
 # ---------------------------------------------------------------------------
 
 
+def _net_pins(
+    placed_components: list[PlacedComponent],
+) -> dict[str, list[tuple[float, float]]]:
+    """Group absolute pin positions by net name (ground excluded)."""
+    net_pins: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for pc in placed_components:
+        pins = _pin_positions(pc)
+        for idx, node in enumerate(pc.component.nodes):
+            if idx < len(pins) and not _is_ground(node):
+                net_pins[node].append(pins[idx])
+    return net_pins
+
+
+def _on_segment(p: tuple[float, float], wire: Wire, eps: float = 1e-6) -> bool:
+    """Return True if point p lies on the axis-aligned wire (endpoints included)."""
+    (x1, y1), (x2, y2) = wire.start, wire.end
+    return (
+        min(x1, x2) - eps <= p[0] <= max(x1, x2) + eps
+        and min(y1, y2) - eps <= p[1] <= max(y1, y2) + eps
+    )
+
+
+def _route_nets(
+    placed_components: list[PlacedComponent],
+) -> tuple[list[Wire], list[tuple[float, float]], set[str]]:
+    """Route wires between pins sharing the same net.
+
+    KiCad connects anything that touches a wire, so a net is only wired if its
+    wires touch no pin or wire of another net. Nets that cannot be wired that
+    way are returned as unrouted and get a net label on every pin instead.
+
+    Returns (wires, junctions, unrouted_nets).
+    """
+    net_pins = _net_pins(placed_components)
+
+    # Every pin, including ground pins (GND symbols are placed on them)
+    all_pins: list[tuple[str, tuple[float, float]]] = []
+    for pc in placed_components:
+        pins = _pin_positions(pc)
+        for idx, node in enumerate(pc.component.nodes):
+            if idx < len(pins):
+                net = "0" if _is_ground(node) else node
+                all_pins.append((net, pins[idx]))
+
+    wires: list[Wire] = []
+    wire_nets: list[str] = []
+    junctions: list[tuple[float, float]] = []
+    unrouted: set[str] = set()
+
+    for net, pin_list in net_pins.items():
+        if len(pin_list) < 2:
+            continue
+        # Sort by x then y for consistent routing
+        pin_list = sorted(pin_list)
+        net_wires: list[Wire] = []
+        net_junctions: list[tuple[float, float]] = []
+        for i in range(len(pin_list) - 1):
+            x1, y1 = pin_list[i]
+            x2, y2 = pin_list[i + 1]
+            # Manhattan L-route: horizontal then vertical
+            if x1 != x2 and y1 != y2:
+                mid = (x2, y1)
+                net_wires.append(Wire((x1, y1), mid))
+                net_wires.append(Wire(mid, (x2, y2)))
+            else:
+                net_wires.append(Wire((x1, y1), (x2, y2)))
+            if i > 0:
+                net_junctions.append((x1, y1))
+
+        foreign_points = [p for n, p in all_pins if n != net]
+        foreign_points += [
+            pt
+            for w, n in zip(wires, wire_nets, strict=True)
+            if n != net
+            for pt in (w.start, w.end)
+        ]
+        foreign_wires = [w for w, n in zip(wires, wire_nets, strict=True) if n != net]
+        conflict = any(
+            _on_segment(p, w) for w in net_wires for p in foreign_points
+        ) or any(
+            _on_segment(pt, fw)
+            for w in net_wires
+            for pt in (w.start, w.end)
+            for fw in foreign_wires
+        )
+        if conflict:
+            unrouted.add(net)
+            continue
+
+        wires.extend(net_wires)
+        wire_nets.extend([net] * len(net_wires))
+        junctions.extend(net_junctions)
+
+    return wires, list(dict.fromkeys(junctions)), unrouted
+
+
 def _route_wires(
     placed_components: list[PlacedComponent],
 ) -> tuple[list[Wire], list[tuple[float, float]]]:
@@ -196,41 +307,7 @@ def _route_wires(
 
     Returns (wires, junctions).
     """
-    net_pins: dict[str, list[tuple[float, float]]] = defaultdict(list)
-
-    for pc in placed_components:
-        pins = _pin_positions(pc)
-        for idx, node in enumerate(pc.component.nodes):
-            if idx < len(pins) and not _is_ground(node):
-                net_pins[node].append(pins[idx])
-
-    wires: list[Wire] = []
-    junctions: list[tuple[float, float]] = []
-
-    for _net, pin_list in net_pins.items():
-        if len(pin_list) < 2:
-            continue
-        # Sort by x then y for consistent routing
-        pin_list.sort()
-        for i in range(len(pin_list) - 1):
-            x1, y1 = pin_list[i]
-            x2, y2 = pin_list[i + 1]
-            # Manhattan L-route: horizontal then vertical
-            if x1 != x2 and y1 != y2:
-                mid = (_snap_to_grid(x2), _snap_to_grid(y1))
-                wires.append(Wire((x1, y1), mid))
-                wires.append(Wire(mid, (x2, y2)))
-                if i > 0:
-                    junctions.append((x1, y1))
-            else:
-                wires.append(Wire((x1, y1), (x2, y2)))
-                if i > 0:
-                    junctions.append((x1, y1))
-
-        # Add junction at multi-connection points
-        if len(pin_list) > 2:
-            junctions.append(pin_list[1])
-
+    wires, junctions, _unrouted = _route_nets(placed_components)
     return wires, junctions
 
 
@@ -259,17 +336,21 @@ def _find_ground_pins(
 
 def _find_net_labels(
     placed_components: list[PlacedComponent],
+    unrouted: set[str] | None = None,
 ) -> list[tuple[float, float, str]]:
-    """Find named nets (not numbered, not ground) and return label positions."""
-    net_pins: dict[str, list[tuple[float, float]]] = defaultdict(list)
-    for pc in placed_components:
-        pins = _pin_positions(pc)
-        for idx, node in enumerate(pc.component.nodes):
-            if idx < len(pins) and not _is_ground(node):
-                net_pins[node].append(pins[idx])
+    """Find named nets (not numbered, not ground) and return label positions.
+
+    Nets in ``unrouted`` have no wires, so every one of their pins is labelled
+    (numbered nets included) to connect them by name.
+    """
+    unrouted = unrouted or set()
+    net_pins = _net_pins(placed_components)
 
     labels: list[tuple[float, float, str]] = []
     for net_name, pin_list in net_pins.items():
+        if net_name in unrouted:
+            labels.extend((x, y, net_name) for x, y in pin_list)
+            continue
         # Skip purely numeric net names
         if net_name.isdigit():
             continue
@@ -552,13 +633,15 @@ _LIB_SYMBOL_TEMPLATES: dict[str, str] = {
 }
 
 
-def _build_lib_symbols(used_lib_ids: set[str]) -> str:
+def _build_lib_symbols(used_lib_ids: set[str], include_gnd: bool = False) -> str:
     """Assemble lib_symbols section with only the templates actually used."""
     parts: list[str] = []
     parts.append("  (lib_symbols")
     for lib_id in sorted(used_lib_ids):
         if lib_id in _LIB_SYMBOL_TEMPLATES:
             parts.append(_LIB_SYMBOL_TEMPLATES[lib_id])
+    if include_gnd:
+        parts.append(_GND_LIB_SYMBOL)
     parts.append("  )")
     return "\n".join(parts)
 
@@ -595,7 +678,7 @@ def _emit_symbol_instance(placed: PlacedComponent, sheet_uuid: str) -> str:
     pin_lines: list[str] = []
     n_pins = min(len(comp.nodes), len(sym.pin_numbers))
     for i in range(n_pins):
-        pin_lines.append(f'        (pin "{sym.pin_numbers[i]}" (uuid "{_uid()}"))')
+        pin_lines.append(f'      (pin "{sym.pin_numbers[i]}" (uuid "{_uid()}"))')
 
     # Rotation angle for KiCad (uses degrees)
     angle = placed.rotation
@@ -616,7 +699,9 @@ def _emit_symbol_instance(placed: PlacedComponent, sheet_uuid: str) -> str:
         f'      (uuid "{sym_uuid}")',
     ]
     lines.extend(props)
-    lines.append("      (pin_names (offset 1.016))")
+    # KiCad requires (pin ...) nodes before (instances ...); (pin_names ...)
+    # is only valid in lib_symbols definitions, not in placed symbols.
+    lines.extend(pin_lines)
     lines.append("      (instances")
     lines.append('        (project ""')
     lines.append(f'          (path "/{sheet_uuid}"')
@@ -624,8 +709,6 @@ def _emit_symbol_instance(placed: PlacedComponent, sheet_uuid: str) -> str:
     lines.append("          )")
     lines.append("        )")
     lines.append("      )")
-    if pin_lines:
-        lines.extend(pin_lines)
     lines.append("    )")
     return "\n".join(lines)
 
@@ -643,21 +726,20 @@ def _emit_wire(wire: Wire) -> str:
 
 
 def _emit_power_symbol(x: float, y: float, sheet_uuid: str) -> str:
-    """Emit a GND power port symbol at the given position."""
+    """Emit a GND power port symbol whose pin sits exactly at (x, y)."""
     sym_uuid = _uid()
     return (
-        f'    (symbol (lib_id "power:GND") (at {x} {y + 2.54} 0)\n'
-        f"      (mirror y)\n"
+        f'    (symbol (lib_id "power:GND") (at {x} {y} 0)\n'
         f'      (uuid "{sym_uuid}")\n'
-        f'      (property "Reference" "#PWR?" (at {x} {y + 3.81} 0)\n'
+        f'      (property "Reference" "#PWR?" (at {x} {_mm(y + 6.35)} 0)\n'
         f"        (effects (font (size 1.27 1.27)) hide))\n"
-        f'      (property "Value" "GND" (at {x} {y + 5.08} 0)\n'
+        f'      (property "Value" "GND" (at {x} {_mm(y + 3.81)} 0)\n'
         f"        (effects (font (size 1.27 1.27)) hide))\n"
         f'      (property "Footprint" "" (at {x} {y} 0)\n'
         f"        (effects (font (size 1.27 1.27)) hide))\n"
         f'      (property "Datasheet" "" (at {x} {y} 0)\n'
         f"        (effects (font (size 1.27 1.27)) hide))\n"
-        f"      (pin_names (offset 0))\n"
+        f'      (pin "1" (uuid "{_uid()}"))\n'
         f"      (instances\n"
         f'        (project ""\n'
         f'          (path "/{sheet_uuid}"\n'
@@ -665,7 +747,6 @@ def _emit_power_symbol(x: float, y: float, sheet_uuid: str) -> str:
         f"          )\n"
         f"        )\n"
         f"      )\n"
-        f'      (pin "1" (uuid "{_uid()}"))\n'
         f"    )"
     )
 
@@ -680,9 +761,9 @@ def _emit_junction(x: float, y: float) -> str:
 
 
 def _emit_net_label(x: float, y: float, name: str) -> str:
-    """Emit a net label."""
+    """Emit a net label anchored on the pin at (x, y) so it joins that net."""
     return (
-        f'    (label "{name}" (at {x} {y - 2.54} 0) (fields_autoplaced yes)\n'
+        f'    (label "{name}" (at {x} {y} 0) (fields_autoplaced yes)\n'
         f"      (effects (font (size 1.27 1.27)))\n"
         f'      (uuid "{_uid()}")\n'
         f"    )"
@@ -766,13 +847,13 @@ def export_kicad_schematic(
     placed = _layout_components(components)
 
     # Wire routing
-    wires, junctions = _route_wires(placed)
+    wires, junctions, unrouted = _route_nets(placed)
 
     # Ground symbols
     ground_positions = _find_ground_pins(placed)
 
     # Net labels
-    net_labels = _find_net_labels(placed)
+    net_labels = _find_net_labels(placed, unrouted)
 
     # Collect used lib_ids
     used_lib_ids: set[str] = set()
@@ -786,11 +867,7 @@ def export_kicad_schematic(
     parts.append(_emit_header(sheet_uuid))
 
     # Lib symbols
-    lib_sym = _build_lib_symbols(used_lib_ids)
-    if ground_positions:
-        # Insert GND symbol into lib_symbols
-        lib_sym = lib_sym.replace("  )", _GND_LIB_SYMBOL + "\n  )", 1)
-    parts.append(lib_sym)
+    parts.append(_build_lib_symbols(used_lib_ids, include_gnd=bool(ground_positions)))
     parts.append("")
 
     # Symbol instances

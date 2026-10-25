@@ -34,15 +34,28 @@ def _is_ground(node: str) -> bool:
 def parse_netlist(netlist: str) -> list[ParsedComponent]:
     """Parse a SPICE netlist into a list of ParsedComponent objects.
 
-    Skips blank lines, comments (*), directives (.), and continuations (+).
+    Per SPICE convention the first line is the title and is always ignored
+    (this matches ngspice and the title handling in ``create_circuit``).
+    Also skips blank lines, comments (*), directives (.), continuations (+)
+    and the bodies of ``.subckt ... .ends`` definitions.
     """
     components: list[ParsedComponent] = []
+    subckt_depth = 0
 
-    for line in netlist.splitlines():
+    for line in netlist.splitlines()[1:]:
         stripped = line.strip()
         if not stripped:
             continue
         if stripped.startswith("*"):
+            continue
+        lowered = stripped.lower()
+        if lowered.startswith(".subckt"):
+            subckt_depth += 1
+            continue
+        if lowered.startswith(".ends"):
+            subckt_depth = max(0, subckt_depth - 1)
+            continue
+        if subckt_depth:
             continue
         if stripped.startswith("."):
             continue
