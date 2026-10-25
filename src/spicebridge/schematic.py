@@ -31,18 +31,61 @@ def _is_ground(node: str) -> bool:
     return node.lower() in _GROUND_NAMES
 
 
+# Keywords of the behavioral E/G forms (PSpice/ngspice) when written as a
+# separate token, e.g. "VALUE = {...}" or "TABLE {V(a)} = ..."
+_BEHAVIORAL_KEYWORDS = {"value", "table", "laplace", "freq", "vol", "cur"}
+
+
+def _is_behavioral(tokens: list[str]) -> bool:
+    """Return True for an E/G line in a behavioral form instead of 4 nodes.
+
+    E.g. ``E1 out 0 VALUE={V(a)*2}``, ``E1 out 0 POLY(1) a 0 0 2`` or
+    ``G1 out 0 cur='V(a)*1m'``: the token after the two output nodes is a
+    keyword or an expression, not a node name. Node names never contain
+    ``=``, ``{`` or quotes, so a bare keyword only counts when an expression
+    follows it.
+    """
+    if len(tokens) < 4:
+        return False
+    tok = tokens[3].lower()
+    if tok.startswith("poly(") or any(c in tok for c in "={'"):
+        return True
+    return tok in _BEHAVIORAL_KEYWORDS and len(tokens) > 4 and tokens[4][0] in "={'"
+
+
+def _split_params(tokens: list[str]) -> tuple[list[str], list[str]]:
+    """Split X-line tokens into (nodes + subcircuit name, parameters)."""
+    for i, tok in enumerate(tokens):
+        if tok.lower() == "params:" or "=" in tok:
+            return tokens[:i], tokens[i:]
+    return tokens, []
+
+
 def parse_netlist(netlist: str) -> list[ParsedComponent]:
     """Parse a SPICE netlist into a list of ParsedComponent objects.
 
-    Skips blank lines, comments (*), directives (.), and continuations (+).
+    Per SPICE convention the first line is the title and is always ignored
+    (this matches ngspice and the title handling in ``create_circuit``).
+    Also skips blank lines, comments (*), directives (.), continuations (+)
+    and the bodies of ``.subckt ... .ends`` definitions.
     """
     components: list[ParsedComponent] = []
+    subckt_depth = 0
 
-    for line in netlist.splitlines():
+    for line in netlist.splitlines()[1:]:
         stripped = line.strip()
         if not stripped:
             continue
         if stripped.startswith("*"):
+            continue
+        lowered = stripped.lower()
+        if lowered.startswith(".subckt"):
+            subckt_depth += 1
+            continue
+        if lowered.startswith(".ends"):
+            subckt_depth = max(0, subckt_depth - 1)
+            continue
+        if subckt_depth:
             continue
         if stripped.startswith("."):
             continue
@@ -57,13 +100,19 @@ def parse_netlist(netlist: str) -> list[ParsedComponent]:
         comp_type = ref[0].upper()
 
         if comp_type == "X":
-            # Subcircuit: nodes are between ref and last token (model name)
-            if len(tokens) >= 3:
-                nodes = [n.lower() for n in tokens[1:-1]]
-                value = tokens[-1]
+            # Subcircuit: nodes are between ref and the subcircuit name,
+            # optionally followed by parameters ("params: R=1k" or "R=1k")
+            body, params = _split_params(tokens[1:])
+            if len(body) >= 2:
+                nodes = [n.lower() for n in body[:-1]]
+                value = " ".join([body[-1], *params])
             else:
                 nodes = []
-                value = ""
+                value = " ".join(body + params)
+        elif comp_type in ("E", "G") and _is_behavioral(tokens):
+            # Behavioral form (VALUE=, POLY(n), TABLE, ...): output nodes only
+            nodes = [n.lower() for n in tokens[1:3]]
+            value = " ".join(tokens[3:])
         elif comp_type in COMPONENT_NODE_COUNTS:
             n_nodes = COMPONENT_NODE_COUNTS[comp_type]
             nodes = [n.lower() for n in tokens[1 : 1 + n_nodes]]

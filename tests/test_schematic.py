@@ -127,6 +127,39 @@ R1 in out 1k
         for comp in comps:
             assert isinstance(comp, ParsedComponent)
 
+    @pytest.mark.parametrize(
+        "line, nodes, value",
+        [
+            ("E1 out 0 VALUE={V(a)*2}", ["out", "0"], "VALUE={V(a)*2}"),
+            ("E1 out 0 VALUE = { V(a) * 2 }", ["out", "0"], "VALUE = { V(a) * 2 }"),
+            ("E1 out 0 POLY(1) a 0 0 2", ["out", "0"], "POLY(1) a 0 0 2"),
+            ("G1 out 0 cur=V(a)*1m", ["out", "0"], "cur=V(a)*1m"),
+            ("G1 out 0 TABLE {V(a)} = (0,0) (1,1m)", ["out", "0"], None),
+            # Plain 4-node forms, including node names that look like keywords
+            ("E1 out 0 a 0 10", ["out", "0", "a", "0"], "10"),
+            ("E1 out 0 volt 0 10", ["out", "0", "volt", "0"], "10"),
+            ("G1 out 0 value 0 1m", ["out", "0", "value", "0"], "1m"),
+        ],
+    )
+    def test_controlled_source_forms(self, line, nodes, value):
+        (comp,) = parse_netlist(f"* title\n{line}\n")
+        assert comp.nodes == nodes
+        if value is not None:
+            assert comp.value == value
+
+    @pytest.mark.parametrize(
+        "line, nodes, value",
+        [
+            ("X1 a b mysub", ["a", "b"], "mysub"),
+            ("X1 a b mysub params: R=1k", ["a", "b"], "mysub params: R=1k"),
+            ("X1 a b mysub R=1k C=1n", ["a", "b"], "mysub R=1k C=1n"),
+        ],
+    )
+    def test_subcircuit_parameters_are_not_nodes(self, line, nodes, value):
+        (comp,) = parse_netlist(f"* title\n{line}\n")
+        assert comp.nodes == nodes
+        assert comp.value == value
+
     def test_voltage_divider_parse(self):
         comps = parse_netlist(VOLTAGE_DIVIDER)
         assert len(comps) == 3
