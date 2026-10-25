@@ -44,7 +44,15 @@ def _check_ngspice() -> bool:
 
 
 def _run_via_spicelib(netlist_file: Path, raw_file: Path) -> bool:
-    """Attempt simulation using spicelib's NGspiceSimulator."""
+    """Attempt simulation using spicelib's NGspiceSimulator.
+
+    Disabled by default: the shared-library backend writes ngspice's banner to
+    the process stdout, which corrupts the MCP stdio transport. The subprocess
+    backend captures that output and is protocol-safe. Set
+    SPICEBRIDGE_USE_SPICELIB=1 to opt back in (e.g. over HTTP transport).
+    """
+    if os.environ.get("SPICEBRIDGE_USE_SPICELIB") != "1":
+        return False
     try:
         from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
