@@ -156,3 +156,119 @@ class TestSvgXssEscaping:
         svg = render_svg(netlist)
         assert "<script>" not in svg
         assert "&lt;script&gt;" in svg
+
+
+SALLEN_KEY = """\
+* Sallen-Key lowpass with an ideal op-amp as VCVS
+V1 in 0 DC 0 AC 1
+R1 in n1 10k
+R2 n1 nn 10k
+C1 n1 out 22n
+C2 nn 0 10n
+E1 out 0 nn out 1e6
+.end
+"""
+
+
+def _group(root, ref):
+    return root.find(f".//*[@id='component-{ref}']")
+
+
+class TestSharedLayout:
+    """The SVG draws the same scene as the KiCad export."""
+
+    def test_wires_match_the_kicad_scene(self):
+        from spicebridge.kicad_export import build_scene
+
+        scene = build_scene(SALLEN_KEY)
+        root = ET.fromstring(render_svg(SALLEN_KEY))
+        drawn = sorted(
+            (
+                round(float(w.get("x1")) / 8, 2),
+                round(float(w.get("y1")) / 8, 2),
+                round(float(w.get("x2")) / 8, 2),
+                round(float(w.get("y2")) / 8, 2),
+                w.get("data-node"),
+            )
+            for w in root.findall(".//*[@class='wire']")
+        )
+        expected = sorted((*w.start, *w.end, w.net) for w in scene.wires)
+        assert drawn == expected
+
+    def test_controlled_source_has_all_four_pins(self):
+        root = ET.fromstring(render_svg(SALLEN_KEY))
+        e1 = _group(root, "E1")
+        pin_leads = [
+            el
+            for el in e1.iter()
+            if el.tag.endswith("}line") and el.get("class") == "comp-body"
+        ]
+        assert len(pin_leads) == 4
+
+    def test_net_names_and_values_are_shown(self):
+        root = ET.fromstring(render_svg(SALLEN_KEY))
+        nets = {t.text for t in root.findall(".//*[@class='net-label']")}
+        assert {"in", "n1", "nn", "out"} <= nets
+        labels = {t.text for t in root.findall(".//*[@class='comp-label']")}
+        assert {"R1", "10k", "C1", "22n", "E1", "1e6"} <= labels
+
+    def test_wires_carry_their_net(self):
+        root = ET.fromstring(render_svg(SALLEN_KEY))
+        nets = {w.get("data-node") for w in root.findall(".//*[@class='wire']")}
+        assert nets and nets <= {"in", "n1", "nn", "out"}
+
+    def test_subcircuit_pin_names_are_drawn(self):
+        netlist = (
+            "* named ports\n.subckt amp inp inn out\nE1 out 0 inp inn 1e5\n.ends\n"
+            "V1 a 0 dc 1\nX1 a b b amp\nR1 b 0 1k\n"
+        )
+        root = ET.fromstring(render_svg(netlist))
+        names = {t.text for t in _group(root, "X1").iter() if t.tag.endswith("text")}
+        assert {"inp", "inn", "out"} <= names
+
+    def test_light_theme_uses_kicad_colours(self):
+        svg = render_svg(SALLEN_KEY, theme="light")
+        assert "#840000" in svg and "#ffffff" in svg
+
+    def test_natural_size(self):
+        root = ET.fromstring(render_svg(SALLEN_KEY, width=None, height=None))
+        _, _, vb_w, vb_h = (float(v) for v in root.get("viewBox").split())
+        assert float(root.get("width")) == vb_w
+        assert float(root.get("height")) == vb_h
+
+
+class TestHoverTargets:
+    """Hovering must work inside open outlines and on thin wires."""
+
+    def test_every_component_has_a_hit_area(self):
+        root = ET.fromstring(render_svg(SALLEN_KEY))
+        for ref in ("V1", "R1", "R2", "C1", "C2", "E1"):
+            hits = [
+                el for el in _group(root, ref).iter() if el.get("class") == "comp-hit"
+            ]
+            assert len(hits) == 1, ref
+
+    def test_every_wire_has_a_wide_hit_line_on_the_same_net(self):
+        root = ET.fromstring(render_svg(SALLEN_KEY))
+
+        def wires(cls):
+            return sorted(
+                (w.get("x1"), w.get("y1"), w.get("x2"), w.get("y2"), w.get("data-node"))
+                for w in root.iter()
+                if w.get("class") == cls
+            )
+
+        assert wires("wire") and wires("wire") == wires("wire wire-hit")
+
+
+class TestOperatingPointOverlay:
+    def test_v_node_result_keys_are_annotated(self):
+        """run_dc_op reports node voltages as "v(node)"."""
+        results = {"nodes": {"v(in)": 1.0, "v(OUT)": 0.5, "i(v1)": 0.0}}
+        root = ET.fromstring(render_svg(RC_LOWPASS, results=results))
+        notes = {
+            el.get("data-node"): el.text
+            for el in root.iter()
+            if el.get("class") == "sim-annotation"
+        }
+        assert notes == {"in": "1V", "out": "0.5V"}

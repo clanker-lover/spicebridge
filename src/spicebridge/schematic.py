@@ -1,13 +1,9 @@
-"""Netlist-to-schemdraw schematic generator."""
+"""SPICE netlist parser and schematic drawing."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
-
-import schemdraw
-import schemdraw.elements as elm
 
 from spicebridge.constants import COMPONENT_NODE_COUNTS
 
@@ -31,18 +27,61 @@ def _is_ground(node: str) -> bool:
     return node.lower() in _GROUND_NAMES
 
 
+# Keywords of the behavioral E/G forms (PSpice/ngspice) when written as a
+# separate token, e.g. "VALUE = {...}" or "TABLE {V(a)} = ..."
+_BEHAVIORAL_KEYWORDS = {"value", "table", "laplace", "freq", "vol", "cur"}
+
+
+def _is_behavioral(tokens: list[str]) -> bool:
+    """Return True for an E/G line in a behavioral form instead of 4 nodes.
+
+    E.g. ``E1 out 0 VALUE={V(a)*2}``, ``E1 out 0 POLY(1) a 0 0 2`` or
+    ``G1 out 0 cur='V(a)*1m'``: the token after the two output nodes is a
+    keyword or an expression, not a node name. Node names never contain
+    ``=``, ``{`` or quotes, so a bare keyword only counts when an expression
+    follows it.
+    """
+    if len(tokens) < 4:
+        return False
+    tok = tokens[3].lower()
+    if tok.startswith("poly(") or any(c in tok for c in "={'"):
+        return True
+    return tok in _BEHAVIORAL_KEYWORDS and len(tokens) > 4 and tokens[4][0] in "={'"
+
+
+def _split_params(tokens: list[str]) -> tuple[list[str], list[str]]:
+    """Split X-line tokens into (nodes + subcircuit name, parameters)."""
+    for i, tok in enumerate(tokens):
+        if tok.lower() == "params:" or "=" in tok:
+            return tokens[:i], tokens[i:]
+    return tokens, []
+
+
 def parse_netlist(netlist: str) -> list[ParsedComponent]:
     """Parse a SPICE netlist into a list of ParsedComponent objects.
 
-    Skips blank lines, comments (*), directives (.), and continuations (+).
+    Per SPICE convention the first line is the title and is always ignored
+    (this matches ngspice and the title handling in ``create_circuit``).
+    Also skips blank lines, comments (*), directives (.), continuations (+)
+    and the bodies of ``.subckt ... .ends`` definitions.
     """
     components: list[ParsedComponent] = []
+    subckt_depth = 0
 
-    for line in netlist.splitlines():
+    for line in netlist.splitlines()[1:]:
         stripped = line.strip()
         if not stripped:
             continue
         if stripped.startswith("*"):
+            continue
+        lowered = stripped.lower()
+        if lowered.startswith(".subckt"):
+            subckt_depth += 1
+            continue
+        if lowered.startswith(".ends"):
+            subckt_depth = max(0, subckt_depth - 1)
+            continue
+        if subckt_depth:
             continue
         if stripped.startswith("."):
             continue
@@ -57,13 +96,19 @@ def parse_netlist(netlist: str) -> list[ParsedComponent]:
         comp_type = ref[0].upper()
 
         if comp_type == "X":
-            # Subcircuit: nodes are between ref and last token (model name)
-            if len(tokens) >= 3:
-                nodes = [n.lower() for n in tokens[1:-1]]
-                value = tokens[-1]
+            # Subcircuit: nodes are between ref and the subcircuit name,
+            # optionally followed by parameters ("params: R=1k" or "R=1k")
+            body, params = _split_params(tokens[1:])
+            if len(body) >= 2:
+                nodes = [n.lower() for n in body[:-1]]
+                value = " ".join([body[-1], *params])
             else:
                 nodes = []
-                value = ""
+                value = " ".join(body + params)
+        elif comp_type in ("E", "G") and _is_behavioral(tokens):
+            # Behavioral form (VALUE=, POLY(n), TABLE, ...): output nodes only
+            nodes = [n.lower() for n in tokens[1:3]]
+            value = " ".join(tokens[3:])
         elif comp_type in COMPONENT_NODE_COUNTS:
             n_nodes = COMPONENT_NODE_COUNTS[comp_type]
             nodes = [n.lower() for n in tokens[1 : 1 + n_nodes]]
@@ -85,144 +130,12 @@ def parse_netlist(netlist: str) -> list[ParsedComponent]:
     return components
 
 
-# Mapping from component type to schemdraw element class
-_ELEMENT_MAP: dict[str, type] = {
-    "R": elm.Resistor,
-    "C": elm.Capacitor,
-    "L": elm.Inductor,
-    "V": elm.SourceV,
-    "I": elm.SourceI,
-    "D": elm.Diode,
-    "Q": elm.BjtNpn,
-    "M": elm.NFet,
-    "X": elm.Opamp,
-}
-
-
-def _is_ac_source(comp: ParsedComponent) -> bool:
-    """Check if a voltage source has AC specification."""
-    return bool(re.search(r"\bac\b", comp.value, re.IGNORECASE))
-
-
-def _classify_components(
-    components: list[ParsedComponent],
-) -> tuple[list[ParsedComponent], list[ParsedComponent], list[ParsedComponent]]:
-    """Split components into sources, series, and shunt lists.
-
-    Sources are voltage (V) or current (I) sources.
-    Shunt components have at least one ground-connected node.
-    Series components are everything else.
-
-    Returns:
-        Tuple of (sources, series, shunt).
-    """
-    sources: list[ParsedComponent] = []
-    series: list[ParsedComponent] = []
-    shunt: list[ParsedComponent] = []
-
-    for comp in components:
-        if comp.comp_type in ("V", "I"):
-            sources.append(comp)
-        elif any(_is_ground(n) for n in comp.nodes):
-            shunt.append(comp)
-        else:
-            series.append(comp)
-
-    return sources, series, shunt
-
-
-def _draw_sources(
-    d: schemdraw.Drawing,
-    sources: list[ParsedComponent],
-    node_positions: dict[str, tuple[float, float]],
-) -> None:
-    """Draw source elements on the drawing going UP from ground.
-
-    Updates node_positions with the start/end positions of each source.
-    """
-    for comp in sources:
-        elem_cls = (
-            elm.SourceSin if _is_ac_source(comp) else _ELEMENT_MAP[comp.comp_type]
-        )
-        e = d.add(elem_cls().up().label(comp.ref))
-        if comp.nodes:
-            node_positions[comp.nodes[0]] = e.end
-            if len(comp.nodes) > 1:
-                node_positions[comp.nodes[1]] = e.start
-
-
-def _draw_series(
-    d: schemdraw.Drawing,
-    series: list[ParsedComponent],
-    node_positions: dict[str, tuple[float, float]],
-) -> None:
-    """Draw series elements going RIGHT.
-
-    Updates node_positions with the start/end positions of each element.
-    """
-    for comp in series:
-        elem_cls = _ELEMENT_MAP.get(comp.comp_type, elm.Resistor)
-        e = d.add(elem_cls().right().label(comp.ref))
-        if comp.nodes:
-            node_positions[comp.nodes[0]] = e.start
-            if len(comp.nodes) > 1:
-                node_positions[comp.nodes[1]] = e.end
-
-
-def _draw_shunt(
-    d: schemdraw.Drawing,
-    shunt: list[ParsedComponent],
-    node_positions: dict[str, tuple[float, float]],
-) -> None:
-    """Draw shunt-to-ground elements going DOWN.
-
-    For each shunt component, if its signal node (non-ground) already has a
-    known position, a short line is drawn from that position before placing
-    the component downward with a ground symbol underneath.
-    """
-    for comp in shunt:
-        elem_cls = _ELEMENT_MAP.get(comp.comp_type, elm.Resistor)
-        # Find the signal node (non-ground)
-        signal_node = None
-        for n in comp.nodes:
-            if not _is_ground(n):
-                signal_node = n
-                break
-
-        if signal_node and signal_node in node_positions:
-            d.add(elm.Line().at(node_positions[signal_node]).down().length(0.5))
-
-        d.add(elem_cls().down().label(comp.ref))
-        d.add(elm.Ground())
-
-
-def _draw_source_grounds(
-    d: schemdraw.Drawing,
-    sources: list[ParsedComponent],
-    node_positions: dict[str, tuple[float, float]],
-) -> None:
-    """Add ground symbols under sources.
-
-    Finds the first source with a ground node that has a known position
-    and places a ground symbol there.
-    """
-    if not sources:
-        return
-
-    first_source_gnd = None
-    for comp in sources:
-        for n in comp.nodes:
-            if _is_ground(n) and n in node_positions:
-                first_source_gnd = node_positions[n]
-                break
-        if first_source_gnd:
-            break
-    if first_source_gnd:
-        d.add(elm.Ground().at(first_source_gnd))
-
-
 def draw_schematic(netlist: str, output_path: str | Path, fmt: str = "png") -> Path:
     """Draw a schematic from a SPICE netlist and save to file.
+
+    Uses the same layout and symbols as the KiCad export (via
+    ``svg_renderer.render_svg``) in KiCad's colours; PNG is rendered from
+    the SVG with cairosvg.
 
     Args:
         netlist: SPICE netlist string.
@@ -235,30 +148,18 @@ def draw_schematic(netlist: str, output_path: str | Path, fmt: str = "png") -> P
     Raises:
         ValueError: If the netlist contains no components.
     """
-    components = parse_netlist(netlist)
-    if not components:
+    # Imported here: svg_renderer depends on this module
+    from spicebridge.svg_renderer import render_svg
+
+    if not parse_netlist(netlist):
         raise ValueError("Netlist contains no components to draw")
 
     output_path = Path(output_path)
+    svg = render_svg(netlist, width=None, height=None, theme="light")
+    if fmt == "svg":
+        output_path.write_text(svg, encoding="utf-8")
+    else:
+        import cairosvg
 
-    sources, series, shunt = _classify_components(components)
-
-    d = schemdraw.Drawing(backend="svg", show=False)
-
-    # Track node positions for connecting shunt components
-    node_positions: dict[str, tuple[float, float]] = {}
-
-    # 1. Draw sources on the left going UP from ground
-    _draw_sources(d, sources, node_positions)
-
-    # 2. Draw series components going RIGHT
-    _draw_series(d, series, node_positions)
-
-    # 3. Draw shunt components going DOWN to ground
-    _draw_shunt(d, shunt, node_positions)
-
-    # Add a ground at the source bottom if we drew sources
-    _draw_source_grounds(d, sources, node_positions)
-
-    d.save(str(output_path))
+        cairosvg.svg2png(bytestring=svg.encode("utf-8"), write_to=str(output_path))
     return output_path

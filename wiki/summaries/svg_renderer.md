@@ -4,37 +4,28 @@
 
 ## Purpose
 
-Interactive SVG schematic renderer with data attributes for the web viewer. Produces dark-themed SVGs with hover effects, net labels, and optional simulation result overlays.
+SVG schematic renderer for the web viewer and the `draw_schematic` tool. It draws the same placed and routed schematic as the KiCad export, so the picture on screen and the exported `.kicad_sch` match.
 
 ## Public API
 
-- **`render_svg(netlist, results=None, width=800, height=600)`**: Renders a SPICE netlist as an interactive SVG string. Optionally overlays DC operating point voltages on nodes.
+- **`render_svg(netlist, results=None, width=800, height=600, theme="dark")`**: Renders a SPICE netlist as an SVG string. `results` overlays DC operating point voltages on the nodes. `width`/`height` of `None` use the drawing's natural size. `theme` is `"dark"` (web viewer) or `"light"` (KiCad colours, used by `draw_schematic`).
 
-## Layout Engine
+## How It Works
 
-Uses column-based placement:
-- **Column 1** (`x=100`): Sources (V, I) -- vertical orientation.
-- **Column 2** (`x=300`): Series components -- rotated 90 degrees (horizontal).
-- **Column 3** (`x=500`): Shunt components -- vertical with ground symbols.
+1. `kicad_export.build_scene()` parses, places (signal-flow layout) and routes (maze router) the netlist.
+2. Each component is drawn from the graphics of its embedded KiCad lib symbol (polylines, rectangles, circles, arcs, pins and pin names), placed and rotated exactly like in KiCad.
+3. Wires, junctions, GND symbols, net labels and the Reference/Value fields come from the same scene.
 
-Spacing: `_Y_SPACING = 120` pixels between components.
-
-## Component Symbols
-
-Hand-drawn SVG paths for each component type: resistor (zigzag), capacitor (parallel plates), inductor (semicircular bumps), voltage source (circle with +/-), current source (circle with arrow), diode (triangle + bar), BJT (vertical bar + diagonal leads), MOSFET (gate oxide bar + channel), and generic rectangle for subcircuits.
-
-## Wire Routing
-
-Manhattan L-routing: connects pins sharing the same net name. Horizontal first, then vertical. Junction dots placed at multi-connection points.
+Coordinates are KiCad millimetres scaled to 8 SVG units per mm.
 
 ## Interactive Features
 
-SVG elements carry `data-ref`, `data-type`, `data-value`, `data-node` attributes. CSS hover effects highlight components and labels in yellow (`#ffeb3b`). Dark theme with cyan components (`#4fc3f7`), green labels (`#81c784`), purple net labels (`#ce93d8`).
+Components are `<g class="component">` groups with `id="component-<ref>"`, `data-ref`, `data-type` and `data-value`. Wires carry `data-node` with their net name, as do net labels and simulation annotations, so the viewer can highlight a whole net. CSS hover effects highlight components and nets.
 
 ## Dependencies
 
-`xml.etree.ElementTree`, `math`, `spicebridge.schematic` (ParsedComponent, parse_netlist, _is_ground).
+`xml.etree.ElementTree`, [kicad_export.py](kicad_export.md) (`build_scene`, field and pin geometry), [schematic.py](schematic.md) (`parse_netlist`).
 
 ## Architecture Role
 
-Interactive visualization layer. Called by [web_viewer.py](web_viewer.md) and [server.py](server.md). See [visualization-pipeline](../concepts/visualization-pipeline.md).
+Visualization layer. Called by [web_viewer.py](web_viewer.md) and, through `schematic.draw_schematic`, by [server.py](server.md). See [visualization-pipeline](../concepts/visualization-pipeline.md).
