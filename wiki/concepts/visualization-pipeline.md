@@ -4,17 +4,17 @@ Cross-cutting concept appearing in: `schematic.py`, `svg_renderer.py`, `kicad_ex
 
 ## FACTS
 
-SPICEBridge has four visualization outputs, all sharing the `parse_netlist()` function from `schematic.py` as their common entry point:
+SPICEBridge has four visualization outputs. All of them draw the same scene: `kicad_export.build_scene()` parses the netlist (`parse_netlist()` from `schematic.py`), places the components and routes the wires.
 
-### 1. Static Schematic (schemdraw)
+### 1. Static Schematic
 - **Module**: `schematic.py` -> `draw_schematic()`
-- **Output**: PNG or SVG file via schemdraw library
+- **Output**: PNG or SVG file, drawn by `render_svg(theme="light")`; PNG via cairosvg
 - **Used by**: `draw_schematic` tool in `server.py`
 - **For**: Inline image delivery to MCP clients
 
 ### 2. Interactive SVG
 - **Module**: `svg_renderer.py` -> `render_svg()`
-- **Output**: SVG string with data attributes and CSS hover effects
+- **Output**: SVG string with data attributes and CSS hover effects, using the graphics of the embedded KiCad lib symbols
 - **Used by**: Web viewer API (`/api/circuit/{id}/svg`)
 - **For**: Browser-based interactive viewing with simulation overlay
 
@@ -29,14 +29,13 @@ SPICEBridge has four visualization outputs, all sharing the `parse_netlist()` fu
 - **Flow**: SVG -> cairosvg -> PNG -> cache -> HTTP serve at `/schematics/{id}.png`
 - **For**: Public URL accessible from Claude.ai (users cannot see inline MCP images)
 
-## Shared Layout Pattern
+## Shared Layout
 
-All three renderers (schemdraw, SVG, KiCad) use the same column-based layout algorithm:
-- Column 1: Sources (V, I) -- vertical
-- Column 2: Series components -- horizontal/rotated
-- Column 3: Shunt components (ground-connected) -- vertical with ground symbol
-
-This consistency means schematics look similar regardless of output format.
+The static schematic, the interactive SVG and the KiCad export use one layout and one router (`kicad_export.build_scene()`), so all three show the same drawing:
+- Nets get columns following the signal flow from the signal sources; supply rails do not take part.
+- 2-pin parts between two nets sit on the main row between their columns; feedback parts in rows above it.
+- Parts to ground and multi-pin parts hang below their net, parts to a supply stand above with the supply as a rail on top.
+- A maze router on a 1.27 mm grid connects the pins, crossing other nets only at right angles; nets it cannot route get net labels.
 
 ## INFERENCES
 

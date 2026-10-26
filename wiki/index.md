@@ -31,8 +31,8 @@ One page per significant source file. Each covers: purpose, public API, key type
 - [templates JSON](summaries/templates_json.md) -- 11 built-in circuit template data files
 
 ### Visualization
-- [schematic.py](summaries/schematic.md) -- Static schematic rendering via schemdraw
-- [svg_renderer.py](summaries/svg_renderer.md) -- Interactive SVG with hover effects
+- [schematic.py](summaries/schematic.md) -- Netlist parser and static schematic (PNG/SVG)
+- [svg_renderer.py](summaries/svg_renderer.md) -- SVG renderer (web viewer and draw_schematic)
 - [kicad_export.py](summaries/kicad_export.md) -- KiCad 8 schematic export
 - [web_viewer.py](summaries/web_viewer.md) -- Browser-based viewer with WebSocket updates
 

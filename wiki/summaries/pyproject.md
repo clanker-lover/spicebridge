@@ -20,7 +20,6 @@ Python package configuration. Defines build system, dependencies, entry points, 
 | `spicelib` | `>=1.4.0,<2` | ngspice `.raw` file parsing |
 | `numpy` | `>=1.24,<3` | Numerical computation |
 | `mcp[cli]` | `>=1.25,<2` | MCP server framework (FastMCP) |
-| `schemdraw` | `>=0.19,<1` | Static schematic rendering |
 | `aiohttp` | `>=3.10.11,<4` | Web viewer HTTP server |
 | `cairosvg` | `>=2.7,<3` | SVG to PNG conversion |
 | `psutil` | `>=5.9,<7` | System metrics collection |
